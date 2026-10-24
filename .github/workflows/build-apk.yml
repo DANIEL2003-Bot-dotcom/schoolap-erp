@@ -1,0 +1,95 @@
+# Application Android des enseignants : tests, compilation signée et publication.
+# Chaque compilation réussie publie l'APK dans « Releases ». Lien de téléchargement permanent :
+#   https://github.com/<compte>/<dépôt>/releases/latest/download/schoolap-enseignant.apk
+name: Application enseignant (APK)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+env:
+  API_URL: https://schoolap-erp-api.onrender.com
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Dépendances
+        run: flutter pub get
+
+      - name: Tests (synchronisation hors ligne, écrans)
+        run: flutter test --exclude-tags screenshots
+
+      - name: Clé de signature (secrets chiffrés du dépôt)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::Secrets ANDROID_* absents : APK signé avec une clé de débogage (les mises à jour exigeront une désinstallation)."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/schoolap-enseignant.jks
+          {
+            echo "storeFile=schoolap-enseignant.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > android/key.properties
+
+      - name: Compilation de l'APK (reliée à l'API de production)
+        run: |
+          flutter build apk --release \
+            --dart-define=API_URL=$API_URL \
+            --build-name=1.0.${{ github.run_number }} \
+            --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk schoolap-enseignant.apk
+          ls -lh schoolap-enseignant.apk
+
+      - name: Publication (GitHub Releases)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-v1.0.${{ github.run_number }}
+          name: Application enseignant v1.0.${{ github.run_number }}
+          make_latest: 'true'
+          files: mobile/schoolap-enseignant.apk
+          body: |
+            Application Android des enseignants — ERP Scolaire RDC (Institut Mwanga).
+
+            • Installation : ouvrir ce lien sur le téléphone, télécharger schoolap-enseignant.apk, autoriser « Installer des applications inconnues » pour le navigateur, puis installer.
+            • Serveur préconfiguré : ${{ env.API_URL }}
+            • Connexion : numéro de téléphone + mot de passe du compte Enseignant.
+            • Les mises à jour s'installent par-dessus la version précédente (même signature) sans perdre les appels en attente.
+
+      - name: Nettoyage de la clé
+        if: always()
+        run: rm -f android/app/schoolap-enseignant.jks android/key.properties

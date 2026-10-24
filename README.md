@@ -97,6 +97,12 @@ Le tableau de bord n'a **aucun mode visiteur ou démonstration** : il faut un co
 
 ### 1.3 Application mobile (APK)
 
+**Téléchargement direct (sur le téléphone Android) :** https://github.com/DANIEL2003-Bot-dotcom/schoolap-erp/releases/latest/download/schoolap-enseignant.apk
+
+L'APK est compilé, testé, signé et publié automatiquement par GitHub Actions (workflow « Application enseignant (APK) ») à chaque modification du dossier `mobile/`. Il est déjà relié à l'API de production. La signature est toujours la même (clé stockée dans les secrets chiffrés du dépôt), donc les mises à jour s'installent par-dessus l'ancienne version.
+
+Compilation manuelle :
+
 ```bash
 cd mobile
 flutter pub get
