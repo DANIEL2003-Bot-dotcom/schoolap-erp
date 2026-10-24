@@ -1,0 +1,349 @@
+// =============================================================================
+//  ERP SCOLAIRE RDC — Schéma Prisma (PostgreSQL)
+//  Entités : School, User, Class, Student, Subject, Attendance, Grade,
+//            SchoolFee, Transaction, SmsLog
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+//  Énumérations
+// -----------------------------------------------------------------------------
+
+/// Les 26 provinces de la République Démocratique du Congo
+enum Province {
+  KINSHASA
+  KONGO_CENTRAL
+  KWANGO
+  KWILU
+  MAI_NDOMBE
+  KASAI
+  KASAI_CENTRAL
+  KASAI_ORIENTAL
+  LOMAMI
+  SANKURU
+  MANIEMA
+  SUD_KIVU
+  NORD_KIVU
+  ITURI
+  HAUT_UELE
+  TSHOPO
+  BAS_UELE
+  NORD_UBANGI
+  MONGALA
+  SUD_UBANGI
+  EQUATEUR
+  TSHUAPA
+  TANGANYIKA
+  HAUT_LOMAMI
+  LUALABA
+  HAUT_KATANGA
+}
+
+enum UserRole {
+  ADMIN
+  DIRECTOR
+  BURSAR
+  TEACHER
+}
+
+enum Gender {
+  M
+  F
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum Term {
+  T1
+  T2
+  T3
+}
+
+enum FeeType {
+  INSCRIPTION
+  MINERVAL
+  FRAIS_SCOLAIRES
+  FRAIS_CONNEXES
+  FRAIS_EXAMEN
+  UNIFORME
+  AUTRE
+}
+
+/// SOLDE : entièrement payé. EN_COURS : pas encore soldé, échéance non dépassée.
+/// INSOLVABLE : pas soldé ET échéance dépassée.
+enum FeeStatus {
+  SOLDE
+  EN_COURS
+  INSOLVABLE
+}
+
+enum Currency {
+  USD
+  CDF
+}
+
+enum MobileOperator {
+  MPESA
+  ORANGE_MONEY
+  AIRTEL_MONEY
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum SmsType {
+  ABSENCE_ALERT
+  FEE_REMINDER
+  PAYMENT_RECEIPT
+}
+
+enum SmsStatus {
+  SENT
+  FAILED
+}
+
+// -----------------------------------------------------------------------------
+//  Organisation
+// -----------------------------------------------------------------------------
+
+model School {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  province  Province
+  epstCode  String   @unique @map("epst_code")
+  city      String?
+  phone     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users    User[]
+  classes  Class[]
+  students Student[]
+  subjects Subject[]
+
+  @@map("schools")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  schoolId     String   @map("school_id") @db.Uuid
+  fullName     String   @map("full_name")
+  phone        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  school           School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classesTaught    Class[]      @relation("ClassTeacher")
+  attendanceMarked Attendance[] @relation("AttendanceRecordedBy")
+  gradesEntered    Grade[]      @relation("GradeEnteredBy")
+
+  @@index([schoolId, role])
+  @@map("users")
+}
+
+model Class {
+  id        String   @id @default(uuid()) @db.Uuid
+  schoolId  String   @map("school_id") @db.Uuid
+  level     String /// ex : "5e Primaire", "3e Humanités"
+  option    String? /// ex : "Commerciale", "Scientifique", "Pédagogie générale"
+  section   String? /// ex : "A", "B"
+  name      String /// ex : "3e Humanités Commerciale A"
+  teacherId String?  @map("teacher_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  school     School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher    User?        @relation("ClassTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+  students   Student[]
+  attendance Attendance[]
+
+  @@unique([schoolId, name])
+  @@index([teacherId])
+  @@map("classes")
+}
+
+model Student {
+  id            String   @id @default(uuid()) @db.Uuid
+  schoolId      String   @map("school_id") @db.Uuid
+  classId       String   @map("class_id") @db.Uuid
+  matricule     String   @unique
+  lastName      String   @map("last_name") /// Nom
+  middleName    String   @map("middle_name") /// Postnom
+  firstName     String   @map("first_name") /// Prénom
+  gender        Gender
+  guardianName  String?  @map("guardian_name")
+  guardianPhone String   @map("guardian_phone") /// Téléphone du tuteur, format E.164 +243XXXXXXXXX
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  class        Class         @relation(fields: [classId], references: [id], onDelete: Restrict)
+  attendance   Attendance[]
+  grades       Grade[]
+  fees         SchoolFee[]
+  transactions Transaction[]
+  smsLogs      SmsLog[]
+
+  @@index([classId])
+  @@index([schoolId, lastName])
+  @@map("students")
+}
+
+model Subject {
+  id              String   @id @default(uuid()) @db.Uuid
+  schoolId        String   @map("school_id") @db.Uuid
+  name            String
+  defaultMaxScore Decimal  @default(20) @map("default_max_score") @db.Decimal(6, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  school School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  grades Grade[]
+
+  @@unique([schoolId, name])
+  @@map("subjects")
+}
+
+// -----------------------------------------------------------------------------
+//  Présences (saisies hors-ligne sur mobile)
+// -----------------------------------------------------------------------------
+
+model Attendance {
+  id              String           @id @db.Uuid /// UUID généré par l'appareil de l'enseignant
+  studentId       String           @map("student_id") @db.Uuid
+  classId         String           @map("class_id") @db.Uuid
+  date            DateTime         @db.Date
+  status          AttendanceStatus
+  isSynced        Boolean          @default(true) @map("is_synced") /// Toujours true côté serveur ; false côté mobile tant que non acquitté
+  version         Int              @default(1)
+  clientUpdatedAt DateTime         @map("client_updated_at")
+  recordedById    String           @map("recorded_by_id") @db.Uuid
+  smsAlertSentAt  DateTime?        @map("sms_alert_sent_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class      Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  recordedBy User    @relation("AttendanceRecordedBy", fields: [recordedById], references: [id])
+
+  @@unique([studentId, date])
+  @@index([classId, date])
+  @@index([date, status])
+  @@map("attendance")
+}
+
+// -----------------------------------------------------------------------------
+//  Cotes (saisies hors-ligne sur mobile)
+// -----------------------------------------------------------------------------
+
+model Grade {
+  id              String   @id @db.Uuid /// UUID généré par l'appareil
+  studentId       String   @map("student_id") @db.Uuid
+  subjectId       String   @map("subject_id") @db.Uuid
+  term            Term
+  evaluation      String /// ex : "Interrogation 1", "Examen"
+  maxScore        Decimal  @map("max_score") @db.Decimal(6, 2)
+  score           Decimal  @db.Decimal(6, 2)
+  isSynced        Boolean  @default(true) @map("is_synced")
+  version         Int      @default(1)
+  clientUpdatedAt DateTime @map("client_updated_at")
+  enteredById     String   @map("entered_by_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  enteredBy User    @relation("GradeEnteredBy", fields: [enteredById], references: [id])
+
+  @@unique([studentId, subjectId, term, evaluation])
+  @@index([subjectId, term])
+  @@map("grades")
+}
+
+// -----------------------------------------------------------------------------
+//  Finances
+// -----------------------------------------------------------------------------
+
+model SchoolFee {
+  id             String    @id @default(uuid()) @db.Uuid
+  studentId      String    @map("student_id") @db.Uuid
+  schoolYear     String    @map("school_year") /// ex : "2026-2027"
+  feeType        FeeType   @map("fee_type")
+  label          String
+  amountDue      Decimal   @map("amount_due") @db.Decimal(12, 2)
+  amountPaid     Decimal   @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  currency       Currency  @default(USD)
+  dueDate        DateTime  @map("due_date") @db.Date
+  status         FeeStatus @default(EN_COURS)
+  lastReminderAt DateTime? @map("last_reminder_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  student      Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([studentId, schoolYear, feeType, label])
+  @@index([status])
+  @@map("school_fees")
+}
+
+model Transaction {
+  id                String            @id @default(uuid()) @db.Uuid
+  transactionId     String            @unique @map("transaction_id") /// Identifiant interne communiqué à l'opérateur
+  operator          MobileOperator
+  reference         String?           @unique /// Référence renvoyée par l'opérateur (M-Pesa, Orange Money, Airtel Money)
+  payerPhone        String            @map("payer_phone")
+  amount            Decimal           @db.Decimal(12, 2)
+  currency          Currency          @default(USD)
+  status            TransactionStatus @default(PENDING)
+  failureReason     String?           @map("failure_reason")
+  studentId         String            @map("student_id") @db.Uuid
+  schoolFeeId       String            @map("school_fee_id") @db.Uuid
+  webhookReceivedAt DateTime?         @map("webhook_received_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schoolFee SchoolFee @relation(fields: [schoolFeeId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([status, createdAt])
+  @@map("transactions")
+}
+
+// -----------------------------------------------------------------------------
+//  Journal des SMS (alertes d'absence, relances de frais, reçus)
+// -----------------------------------------------------------------------------
+
+model SmsLog {
+  id         String    @id @default(uuid()) @db.Uuid
+  studentId  String?   @map("student_id") @db.Uuid
+  phone      String
+  message    String
+  type       SmsType
+  status     SmsStatus
+  providerId String?   @map("provider_id")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  student Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  @@index([studentId, type, createdAt])
+  @@map("sms_logs")
+}

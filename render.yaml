@@ -1,0 +1,59 @@
+# Blueprint Render — déploiement en un clic (New → Blueprint → sélectionner ce dépôt).
+# Crée : 1 base PostgreSQL gratuite + 1 service web Node gratuit (API Express).
+databases:
+  - name: schoolap-erp-db
+    databaseName: schoolap
+    user: schoolap
+    plan: free
+    region: frankfurt
+    ipAllowList: [] # accès uniquement depuis le réseau privé Render
+
+services:
+  - type: web
+    name: schoolap-erp-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: backend
+    buildCommand: npm ci
+    # Le plan gratuit n'offre pas preDeployCommand : migrations + seed idempotent au démarrage.
+    startCommand: npm run render:start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: schoolap-erp-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 12h
+      # Origine du tableau de bord GitHub Pages, ex : https://moncompte.github.io (sans chemin)
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SIMULATE_OPERATOR_CALLBACK
+        value: "true"
+      - key: OPERATOR_CALLBACK_DELAY_MS
+        value: "4000"
+      - key: SIMULATED_PAYMENT_FAILURE_RATE
+        value: "0.1"
+      - key: SCHOOL_TIMEZONE
+        value: Africa/Lubumbashi
+      - key: TRUST_PROXY
+        value: "1"
+      - key: SMS_SENDER_ID
+        value: ECOLE-RDC
+      - key: LOG_REQUESTS
+        value: "true"
+      # Mots de passe des comptes de démonstration (demandés lors de la création du Blueprint)
+      - key: SEED_DIRECTOR_PASSWORD
+        sync: false
+      - key: SEED_TEACHER_PASSWORD
+        sync: false

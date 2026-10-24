@@ -1,0 +1,38 @@
+{
+  "name": "schoolap-erp-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API Gateway de l'ERP scolaire : synchronisation hors-ligne, alertes SMS, paiements Mobile Money (RDC)",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --env-file=.env --watch src/server.js",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "node prisma/seed.js",
+    "render:start": "prisma migrate deploy && node prisma/seed.js && node src/server.js",
+    "postinstall": "prisma generate",
+    "test": "node --test --test-concurrency=1 tests/",
+    "db:migrate:local": "node --env-file=.env node_modules/prisma/build/index.js migrate deploy",
+    "db:seed:local": "node --env-file=.env prisma/seed.js",
+    "db:setup:local": "npm run db:migrate:local && npm run db:seed:local"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "prisma": "^6.19.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.1"
+  }
+}

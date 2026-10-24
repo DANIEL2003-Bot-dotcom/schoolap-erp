@@ -1,0 +1,27 @@
+# PostgreSQL local en une commande (alternative à l'installation de PostgreSQL) :
+#   docker compose up -d
+# Crée les bases « schoolap » (développement) et « schoolap_test » (tests),
+# utilisateur schoolap / mot de passe schoolap, sur le port 5432.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: schoolap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: schoolap
+      POSTGRES_PASSWORD: schoolap
+      POSTGRES_DB: schoolap
+      TZ: Africa/Lubumbashi
+    ports:
+      - "5432:5432"
+    volumes:
+      - schoolap-data:/var/lib/postgresql/data
+      - ./backend/prisma/docker-init.sql:/docker-entrypoint-initdb.d/01-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schoolap -d schoolap"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  schoolap-data:
