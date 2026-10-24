@@ -958,13 +958,14 @@ function UserForm({ api, user, refData, session, onClose, onSaved, notify, onLog
     e.preventDefault();
     const local = {};
     if (!form.fullName.trim()) local.fullName = 'Nom obligatoire.';
-    if (!editing && !normalizePhone(form.phone)) local.phone = 'Numéro RDC invalide.';
+    if (!normalizePhone(form.phone)) local.phone = 'Numéro RDC invalide.';
     if ((!editing || form.password) && !isStrongPassword(form.password)) local.password = PASSWORD_HINT;
     setErrors(local);
     if (Object.keys(local).length) return;
     const body = editing
       ? {
           fullName: form.fullName,
+          ...(normalizePhone(form.phone) !== user.phone ? { phone: form.phone } : {}),
           ...(form.role !== user.role ? { role: form.role } : {}),
           ...(form.office !== user.office ? { office: form.office } : {}),
           ...(form.password ? { password: form.password } : {}),
@@ -1001,8 +1002,13 @@ function UserForm({ api, user, refData, session, onClose, onSaved, notify, onLog
         <Field id="u-name" label="Nom complet" error={errors.fullName}>
           <input id="u-name" value={form.fullName} onChange={set('fullName')} autoFocus />
         </Field>
-        <Field id="u-phone" label="Téléphone (identifiant de connexion)" error={errors.phone}>
-          <input id="u-phone" value={form.phone} onChange={set('phone')} disabled={editing} inputMode="tel" placeholder="0970000000" />
+        <Field
+          id="u-phone"
+          label="Téléphone (identifiant de connexion)"
+          error={errors.phone}
+          hint={editing ? 'Modifiable : la personne se connectera ensuite avec le nouveau numéro.' : undefined}
+        >
+          <input id="u-phone" value={form.phone} onChange={set('phone')} inputMode="tel" placeholder="0970000000" />
         </Field>
         <div className="form-grid">
           <Field id="u-role" label="Rôle" error={errors.role} hint={self ? 'Vous ne pouvez pas modifier votre propre rôle.' : undefined}>

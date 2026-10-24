@@ -150,6 +150,7 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 | Appel (application mobile) | ✓ | ✓ | ✓ | ✓ | ✓ | — | ses classes |
 | Saisie des cotes (application mobile) | ✓ | ✓ | ✓ | ✓ | — | — | ses classes |
 
+- Depuis **Modifier**, on peut changer le nom, le **numéro de téléphone (identifiant)**, le rôle, le bureau et le mot de passe d'un compte. Un numéro déjà utilisé est refusé.
 - Seul un **Administrateur** peut créer ou modifier un compte Administrateur. Personne ne peut changer son propre rôle ni désactiver son propre compte.
 - Les comptes sont créés par l'administration (**Classes & personnel → + Nouveau compte**). Le mot de passe initial doit compter **8 caractères minimum avec au moins une lettre et un chiffre**. Il est stocké uniquement sous forme de **hachage bcrypt (coût 12, sel aléatoire)** et n'est jamais renvoyé par l'API.
 - Le **tableau de bord est entièrement verrouillé** : il n'existe aucun mode visiteur ou démonstration. Sans jeton valide, seule la page de connexion s'affiche. Au démarrage, la session est vérifiée auprès de l'API (`/api/auth/me`) avant tout affichage. Un jeton expiré, falsifié ou appartenant à un compte désactivé ramène immédiatement à la connexion.

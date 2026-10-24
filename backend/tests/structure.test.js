@@ -91,6 +91,18 @@ describe('Bureaux et rôles EPST', () => {
     assert.equal((await api('patch', `/api/admin/users/${me.id}`).send({ role: 'TEACHER' })).status, 400);
   });
 
+  test('modification du numéro (identifiant) : nouveau numéro actif, ancien refusé, doublon → 409', async () => {
+    await createStaff('BURSAR', '0850000051');
+    const row = await prisma.user.findUniqueOrThrow({ where: { phone: '+243850000051' } });
+    const res = await api('patch', `/api/admin/users/${row.id}`).send({ phone: '0850000052', fullName: 'Comptable renommé' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.user.phone, '+243850000052');
+    assert.equal((await request(ctx.app).post('/api/auth/login').send({ phone: '0850000051', password: 'Ecole2026x' })).status, 401);
+    assert.equal((await login('0850000052', 'Ecole2026x')).user.fullName, 'Comptable renommé');
+    const dup = await api('patch', `/api/admin/users/${row.id}`).send({ phone: SEED_USERS.teacher1.phone });
+    assert.equal(dup.status, 409);
+  });
+
   test('permissions : Préfet gère le personnel, D.E. les classes, D.D. consulte et fait l’appel, Comptable encaisse', async () => {
     const prefet = await createStaff('PREFET', '0970000041');
     const de = await createStaff('DIRECTEUR_ETUDES', '0970000042');

@@ -68,6 +68,7 @@ const userSchema = z.object({
 const userPatchSchema = z
   .object({
     fullName: trimmed('Le nom complet', 120).optional(),
+    phone: phoneField.optional(),
     role: roleField.optional(),
     office: officeField.optional(),
     isActive: z.boolean().optional(),
@@ -480,11 +481,17 @@ export function createAdminService({ prisma, config }) {
       const officeCode = input.office ?? (input.role && input.role !== target.role ? defaultOfficeFor(input.role) : undefined);
       const office = officeCode ? offices.find((o) => o.code === officeCode) : undefined;
 
+      if (input.phone && input.phone !== target.phone) {
+        const taken = await prisma.user.findUnique({ where: { phone: input.phone }, select: { id: true } });
+        if (taken) throw conflict('Ce numéro de téléphone est déjà utilisé par un compte.');
+      }
+
       const updated = await prisma.$transaction(async (db) => {
         const u = await db.user.update({
           where: { id: userId },
           data: {
             ...(input.fullName ? { fullName: input.fullName } : {}),
+            ...(input.phone ? { phone: input.phone } : {}),
             ...(input.role ? { role: input.role } : {}),
             ...(office ? { officeId: office.id } : {}),
             ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
