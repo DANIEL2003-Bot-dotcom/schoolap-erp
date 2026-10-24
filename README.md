@@ -95,7 +95,25 @@ La route de base est réglée dans `dashboard/vite.config.js` : `base` vaut `VIT
 
 Le tableau de bord n'a **aucun mode visiteur ou démonstration** : il faut un compte du personnel administratif (voir la section 2bis).
 
-### 1.3 Application mobile (APK)
+### 1.3 Espace Enseignant pour iPhone (application web installable, gratuite)
+
+**Lien à ouvrir dans Safari sur l'iPhone :** https://daniel2003-bot-dotcom.github.io/schoolap-erp/enseignant/
+
+1. Ouvrez le lien dans **Safari**, puis connectez-vous (téléphone + mot de passe du compte Enseignant).
+2. Touchez **Partager** (carré avec une flèche vers le haut), puis **« Sur l'écran d'accueil »** et **Ajouter**.
+3. L'icône **« Enseignant »** s'ouvre en plein écran, comme une application.
+
+Fonctionnement identique à l'application Android :
+- appel (Présent / Absent, « marquer les restants présents ») ;
+- cotes par matière, période et évaluation ;
+- **mode hors ligne** : listes et saisies stockées sur le téléphone (IndexedDB), application disponible sans réseau grâce au service worker ;
+- envoi automatique des saisies dès le retour du réseau, avec SMS d'absence aux tuteurs.
+
+Le même lien fonctionne aussi sur Android (bouton « Installer ») et sur ordinateur.
+
+Une application iOS « native » sur l'App Store ou TestFlight demande un compte Apple Developer payant (99 $ par an) et une compilation sur Mac. L'application web installable évite ce coût.
+
+### 1.4 Application mobile Android (APK)
 
 **Téléchargement direct (sur le téléphone Android) :** https://github.com/DANIEL2003-Bot-dotcom/schoolap-erp/releases/latest/download/schoolap-enseignant.apk
 

@@ -279,6 +279,10 @@ Le fichier se trouve dans `mobile\build\app\outputs\flutter-apk\app-release.apk`
 
 > Pour une publication sur le Play Store, il faut une clé de signature personnelle (voir https://docs.flutter.dev/deployment/android). Pour une diffusion directe dans l'école, l'APK ci-dessus suffit.
 
+### B4 bis. Enseignants équipés d'un iPhone
+
+Envoyez-leur le lien **https://daniel2003-bot-dotcom.github.io/schoolap-erp/enseignant/**. Ils l'ouvrent dans Safari, touchent **Partager → « Sur l'écran d'accueil »**, puis se connectent avec leur compte Enseignant. L'appel et les cotes fonctionnent aussi sans réseau. Le lien sert également sur Android et sur ordinateur.
+
 ### B5. Après la mise en ligne : à faire tout de suite
 
 1. **Changer les mots de passe** : connectez-vous comme Directeur, puis **Classes & personnel → Personnel → Modifier**. Donnez un nouveau mot de passe à chaque enseignant.

@@ -261,7 +261,7 @@ function LoginScreen({ onLogin }) {
     try {
       const data = await apiFetch('/api/auth/login', { method: 'POST', body: { phone, password }, onSlow: setSlow });
       if (!can(data.user, 'VIEW_SCHOOL')) {
-        setError('Ce tableau de bord est réservé à l’administration (Préfet, Direction, D.E., D.D., Comptabilité). Les enseignants utilisent l’application mobile.');
+        setError('Ce tableau de bord est réservé à l’administration (Préfet, Direction, D.E., D.D., Comptabilité). Enseignants : utilisez l’application Android ou l’Espace Enseignant (iPhone) via le lien ci-dessous.');
         return;
       }
       onLogin({ token: data.token, user: data.user, school: data.school });
@@ -328,6 +328,9 @@ function LoginScreen({ onLogin }) {
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
             {busy ? 'Connexion…' : 'Se connecter'}
           </button>
+          <a className="btn btn-ghost btn-block" href={`${import.meta.env.BASE_URL}enseignant/`} style={{ marginTop: 12, textDecoration: 'none' }}>
+            Vous êtes enseignant ? Espace Enseignant (iPhone, Android, ordinateur)
+          </a>
           <p className="hint" style={{ marginTop: 14 }}>
             API : {API_URL || 'même origine (proxy de développement)'}
           </p>

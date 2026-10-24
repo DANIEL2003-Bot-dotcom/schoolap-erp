@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 
 // GitHub Pages sert le site sous https://<compte>.github.io/<dépôt>/ :
@@ -23,6 +24,16 @@ export default defineConfig(({ command, mode }) => {
       },
     },
     preview: { host: '0.0.0.0', port: 4174, allowedHosts: true },
-    build: { outDir: 'dist', sourcemap: false },
+    build: {
+      outDir: 'dist',
+      sourcemap: false,
+      // Deux applications : le tableau de bord (racine) et l'Espace Enseignant installable (/enseignant/).
+      rollupOptions: {
+        input: {
+          main: fileURLToPath(new URL('./index.html', import.meta.url)),
+          enseignant: fileURLToPath(new URL('./enseignant/index.html', import.meta.url)),
+        },
+      },
+    },
   };
 });
