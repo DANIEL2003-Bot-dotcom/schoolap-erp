@@ -1,4 +1,5 @@
-# Intégration continue : tests de l'API sur un vrai PostgreSQL + build du tableau de bord.
+# Intégration et déploiement continus : tests de l'API sur un vrai PostgreSQL, build du tableau de bord,
+# puis mise en production de l'API sur Render si et seulement si tout est vert.
 name: CI
 
 on:
@@ -50,3 +51,58 @@ jobs:
           cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  # Déploiement continu de l'API : uniquement sur main, uniquement si les tests ET le build ont réussi.
+  # Render construit la nouvelle version, exécute `prisma migrate deploy` sur Neon au démarrage, attend que
+  # /api/health réponde, puis bascule le trafic : l'ancienne instance sert les requêtes jusque-là (aucune coupure).
+  deploy-api:
+    needs: [backend, dashboard]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-api-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://schoolap-erp-api.onrender.com/api/health
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+    steps:
+      - name: Lancer le déploiement Render du commit testé
+        id: trigger
+        run: |
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
+            echo "::error::Secrets RENDER_API_KEY / RENDER_SERVICE_ID absents (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          response=$(curl -fsS -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+            -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+            -d "{\"clearCache\":\"do_not_clear\",\"commitId\":\"$GITHUB_SHA\"}")
+          deploy_id=$(echo "$response" | jq -r '.id')
+          echo "Déploiement Render : $deploy_id (commit $GITHUB_SHA)"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+      - name: Attendre la mise en service (migrations Neon comprises)
+        run: |
+          for i in $(seq 1 90); do
+            status=$(curl -fsS "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/${{ steps.trigger.outputs.deploy_id }}" \
+              -H "Authorization: Bearer $RENDER_API_KEY" | jq -r '.status')
+            echo "[$i] statut : $status"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated|pre_deploy_failed)
+                echo "::error::Déploiement Render en échec ($status). L'ancienne version reste en ligne."
+                exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::error::Délai dépassé (30 min) en attendant Render."
+          exit 1
+      - name: Vérifier l'API en production
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 90 https://schoolap-erp-api.onrender.com/api/health; then echo; exit 0; fi
+            sleep 15
+          done
+          echo "::error::L'API ne répond pas après le déploiement."
+          exit 1

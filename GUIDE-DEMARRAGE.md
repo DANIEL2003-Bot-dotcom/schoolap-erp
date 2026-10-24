@@ -296,7 +296,7 @@ git commit -m "Description de la modification"
 git push
 ```
 
-Render redéploie l'API automatiquement (`autoDeploy: true`). GitHub Actions republie le tableau de bord dès que le dossier `dashboard/` change. Pour l'application mobile, reconstruisez l'APK et redistribuez-le.
+Le pipeline GitHub Actions **CI** exécute les tests de l'API et le build du tableau de bord. **Seulement si tout est vert**, le job « deploy-api » demande à Render de déployer ce commit (secrets `RENDER_API_KEY` et `RENDER_SERVICE_ID`). Les migrations Prisma s'appliquent à Neon au démarrage, et Render ne bascule le trafic qu'une fois `/api/health` opérationnel : il n'y a aucune coupure. Une migration en échec laisse l'ancienne version en ligne. GitHub Actions republie le tableau de bord dès que le dossier `dashboard/` change. Pour l'application mobile, reconstruisez l'APK et redistribuez-le.
 
 ### B7. Limites de l'offre gratuite (à connaître)
 

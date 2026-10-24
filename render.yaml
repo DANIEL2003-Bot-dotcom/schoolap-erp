@@ -19,7 +19,8 @@ services:
     # Le plan gratuit n'offre pas preDeployCommand : migrations + seed idempotent au démarrage.
     startCommand: npm run render:start
     healthCheckPath: /api/health
-    autoDeploy: true
+    # Le déploiement est déclenché par GitHub Actions (job deploy-api) seulement après la réussite des tests.
+    autoDeploy: false
     envVars:
       - key: NODE_ENV
         value: production
