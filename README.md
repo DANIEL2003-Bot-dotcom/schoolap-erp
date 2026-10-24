@@ -2,6 +2,9 @@
 
 Un ERP scolaire complet, de bout en bout, pensé pour les écoles congolaises (organisation EPST, réseau instable, paiements Mobile Money). Il se déploie gratuitement.
 
+> 🌐 **En ligne** : tableau de bord https://daniel2003-bot-dotcom.github.io/schoolap-erp/ · API https://schoolap-erp-api.onrender.com/api/health
+> (base de données PostgreSQL **Neon**, gratuite et sans expiration ; API sur Render, en veille après 15 min d'inactivité)
+
 | Composant | Technologie | Dossier | Déploiement gratuit |
 |---|---|---|---|
 | Base de données | PostgreSQL + Prisma 6 | `backend/prisma` | Render (PostgreSQL Free) |
@@ -65,6 +68,8 @@ Vérification : `https://schoolap-erp-api.onrender.com/api/health` doit renvoyer
 > **Limites de l'offre gratuite Render**
 > - Le service web s'endort après 15 minutes sans trafic. La première requête qui suit prend alors environ 1 minute : le dashboard affiche « Le serveur gratuit se réveille… » et l'application mobile met ses envois en file d'attente puis réessaie.
 > - La base PostgreSQL Free **expire 30 jours après sa création**. Passez-la sur une offre payante ou recréez-la avant cette échéance (exportez les données avec `pg_dump`).
+
+> **Base sans expiration (recommandé)** : créez une base gratuite sur https://neon.tech (région Frankfurt), puis remplacez `DATABASE_URL` du service Render par l'adresse Neon **directe** (sans `-pooler`, avec `?sslmode=require`). Le script `deploy/deploy.sh` fait tout automatiquement : `GITHUB_TOKEN=… RENDER_API_KEY=… EXTERNAL_DATABASE_URL=… bash deploy/deploy.sh`.
 
 ### 1.2 Dashboard sur GitHub Pages
 
