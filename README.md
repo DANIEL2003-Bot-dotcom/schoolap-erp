@@ -54,7 +54,7 @@ Un ERP scolaire complet, de bout en bout, pensé pour les écoles congolaises (o
    - `schoolap-erp-api`, un service web Node **Free**, avec `rootDir: backend` et un health check sur `/api/health`.
 3. Render demande trois valeurs (`sync: false`) :
    - `CORS_ORIGINS` : l'origine de votre dashboard, par exemple `https://moncompte.github.io` (sans chemin, sans `/` final).
-   - `SEED_DIRECTOR_PASSWORD` et `SEED_TEACHER_PASSWORD` : les mots de passe des comptes de démonstration. Si vous les laissez vides, ce seront `Directeur@2026` et `Enseignant@2026`.
+   - `SEED_DIRECTOR_PASSWORD` et `SEED_TEACHER_PASSWORD` : les mots de passe des comptes initiaux. Si vous les laissez vides, ce seront `Directeur@2026` et `Enseignant@2026`.
 4. `JWT_SECRET` et `WEBHOOK_SECRET` sont générés automatiquement (`generateValue: true`).
 5. Au démarrage, `npm run render:start` exécute, dans l'ordre :
    - `prisma migrate deploy` ;
@@ -93,7 +93,7 @@ Choisissez ensuite *Settings → Pages → Branch = gh-pages*.
 
 La route de base est réglée dans `dashboard/vite.config.js` : `base` vaut `VITE_BASE` en production (`/schoolap-erp/` par défaut) et `/` en développement.
 
-Le bouton **« Explorer en mode démonstration »** fait fonctionner le dashboard sans API, avec des données locales. C'est pratique pour présenter le projet.
+Le tableau de bord n'a **aucun mode visiteur ou démonstration** : il faut un compte du personnel administratif (voir la section 2bis).
 
 ### 1.3 Application mobile (APK)
 
@@ -108,13 +108,13 @@ L'URL du serveur reste modifiable depuis l'écran de connexion (*Paramètres du 
 
 ---
 
-## 2. Comptes de démonstration (seed « Institut Mwanga », Goma, code EPST NK1-GOMA-0427)
+## 2. Comptes initiaux (seed « Institut Mwanga », Goma, code EPST NK1-GOMA-0427)
 
 | Rôle | Téléphone | Mot de passe par défaut | Classes |
 |---|---|---|---|
-| Directeur | `+243 990 000 001` | `Directeur@2026` | toutes (dashboard) |
-| Enseignant | `+243 970 000 002` | `Enseignant@2026` | 5e Primaire A, 4e Humanités Scientifique |
-| Enseignante | `+243 810 000 003` | `Enseignant@2026` | 3e Humanités Commerciale |
+| Directeur — bureau Direction | `+243 990 000 001` | `Directeur@2026` | toutes (dashboard) |
+| Enseignant — Salle des professeurs | `+243 970 000 002` | `Enseignant@2026` | 5e Primaire A, 4e Humanités Scientifique |
+| Enseignante — Salle des professeurs | `+243 810 000 003` | `Enseignant@2026` | 3e Humanités Commerciale |
 
 Contenu du seed :
 - 42 élèves ;
@@ -122,7 +122,39 @@ Contenu du seed :
 - 82 transactions Mobile Money historiques ;
 - 5 jours d'appel avec les SMS correspondants.
 
-L'appel du jour du **5e Primaire A est volontairement laissé vide** pour faire la démonstration en direct depuis l'application mobile.
+L'appel du jour du **5e Primaire A est volontairement laissé vide** pour pouvoir faire l'appel en direct depuis l'application mobile.
+
+---
+
+## 2bis. Structure administrative EPST : bureaux, rôles et droits
+
+Chaque établissement dispose automatiquement de **5 bureaux** (créés par la migration `20261025000000_structure_epst` pour les écoles existantes, puis par le seed et l'API pour les nouvelles) :
+
+| Bureau | Rôle(s) rattaché(s) par défaut |
+|---|---|
+| Direction | Directeur, Administrateur |
+| Études / Préfecture | Préfet des études, Directeur des études (D.E.) |
+| Discipline | Directeur de discipline (D.D.) |
+| Comptabilité / Caisse | Comptable |
+| Salle des professeurs | Enseignants |
+
+Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du compte (par exemple un enseignant détaché à la Discipline).
+
+| Droit | Admin | Préfet | Directeur | D.E. | D.D. | Comptable | Enseignant |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Tableau de bord et listes (consultation) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Comptes du personnel | ✓ | ✓ | ✓ | — | — | — | — |
+| Classes, titulaires, matières | ✓ | ✓ | ✓ | ✓ | — | — | — |
+| Inscriptions et import d'élèves | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
+| Frais, remises, relances SMS, encaissement Mobile Money | ✓ | ✓ | ✓ | — | — | ✓ | — |
+| Appel (application mobile) | ✓ | ✓ | ✓ | ✓ | ✓ | — | ses classes |
+| Saisie des cotes (application mobile) | ✓ | ✓ | ✓ | ✓ | — | — | ses classes |
+
+- Seul un **Administrateur** peut créer ou modifier un compte Administrateur. Personne ne peut changer son propre rôle ni désactiver son propre compte.
+- Les comptes sont créés par l'administration (**Classes & personnel → + Nouveau compte**). Le mot de passe initial doit compter **8 caractères minimum avec au moins une lettre et un chiffre**. Il est stocké uniquement sous forme de **hachage bcrypt (coût 12, sel aléatoire)** et n'est jamais renvoyé par l'API.
+- Le **tableau de bord est entièrement verrouillé** : il n'existe aucun mode visiteur ou démonstration. Sans jeton valide, seule la page de connexion s'affiche. Au démarrage, la session est vérifiée auprès de l'API (`/api/auth/me`) avant tout affichage. Un jeton expiré, falsifié ou appartenant à un compte désactivé ramène immédiatement à la connexion.
+- Les routes d'encaissement Mobile Money exigent un jeton et le droit « Frais ». Seul le webhook de l'opérateur reste public, protégé par sa signature HMAC.
+- Sur la page de connexion comme dans le formulaire de compte, l'**icône œil** affiche ou masque le mot de passe saisi.
 
 ---
 
@@ -144,7 +176,7 @@ createdb -O schoolap schoolap_test
 cd backend
 cp .env.example .env
 npm install                     # lance aussi prisma generate
-npm run db:setup:local          # migrations + données de démonstration
+npm run db:setup:local          # migrations + données initiales (Institut Mwanga)
 npm run dev                     # http://localhost:4000
 
 # Tests (base schoolap_test : vidée puis réensemencée avant chaque test)
@@ -172,26 +204,26 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 |---|---|---|---|
 | GET | `/api/health` | public | Santé (avec ping de la base) |
 | POST | `/api/auth/login` | public (10 / 15 min / IP) | `{phone, password}` → JWT |
-| GET | `/api/auth/me` | JWT | Profil |
-| GET | `/api/teacher/bootstrap` | TEACHER, DIRECTOR, ADMIN | Classes, élèves, matières, appel du jour et cotes, pour le mode hors ligne |
-| POST | `/api/attendance/sync` | TEACHER, DIRECTOR, ADMIN | Lot de présences (500 max) |
-| POST | `/api/grades/sync` | TEACHER, DIRECTOR, ADMIN | Lot de cotes |
-| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | DIRECTOR, BURSAR, ADMIN | KPI, absents, insolvables |
-| POST | `/api/fees/:feeId/remind` | DIRECTOR, BURSAR, ADMIN | Relance SMS (1 par 24 h et par frais, sinon 429) |
-| POST | `/api/payments/mobile-money` | public (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
+| GET | `/api/auth/me` | JWT | Profil : rôle, bureau, droits, école (vérification de session du dashboard) |
+| GET | `/api/teacher/bootstrap` | droit « Appel » | Classes, élèves, matières, appel du jour et cotes, pour le mode hors ligne |
+| POST | `/api/attendance/sync` | droit « Appel » | Lot de présences (500 max) |
+| POST | `/api/grades/sync` | droit « Cotes » | Lot de cotes |
+| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, absents, insolvables |
+| POST | `/api/fees/:feeId/remind` | droit « Frais » | Relance SMS (1 par 24 h et par frais, sinon 429) |
+| POST | `/api/payments/mobile-money` | JWT + droit « Frais » (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
 | POST | `/api/payments/mobile-money/webhook` | signature HMAC | Confirmation de l'opérateur |
-| GET | `/api/payments/mobile-money/:transactionId` | public | Suivi du paiement |
-| GET | `/api/admin/overview` | DIRECTOR, ADMIN, BURSAR | Classes (titulaire, effectif), personnel, matières |
-| POST / PATCH / DELETE | `/api/admin/classes[/:id]` | DIRECTOR, ADMIN | Classes ; nom unique (409) ; suppression seulement si aucun élève |
-| POST / PATCH | `/api/admin/users[/:id]` | DIRECTOR, ADMIN | Comptes TEACHER / BURSAR / DIRECTOR, mot de passe, activation |
-| POST / PATCH | `/api/admin/subjects[/:id]` | DIRECTOR, ADMIN | Matières et note maximale par défaut |
-| GET | `/api/admin/students?classId=&q=&status=&page=` | DIRECTOR, ADMIN, BURSAR | Liste paginée + reste à payer |
-| GET | `/api/admin/students/:id` | DIRECTOR, ADMIN, BURSAR | Fiche : frais, paiements, assiduité |
-| POST / PATCH | `/api/admin/students[/:id]` | DIRECTOR, ADMIN, BURSAR | Inscription (matricule auto, frais de la classe), transfert, désinscription |
-| POST | `/api/admin/students/import` | DIRECTOR, ADMIN, BURSAR | Import CSV `{classId, csv, dryRun}` (1 000 lignes max, tout ou rien) |
-| GET | `/api/admin/fees/summary` | DIRECTOR, ADMIN, BURSAR | Synthèse par frais (attendu, encaissé, statuts) |
-| POST | `/api/admin/fees/bulk` | DIRECTOR, ADMIN, BURSAR | Frais pour une ou plusieurs classes (idempotent) |
-| PATCH | `/api/admin/fees/:id` | DIRECTOR, ADMIN, BURSAR | Remise / report ; montant dû ≥ déjà payé ; statut recalculé |
+| GET | `/api/payments/mobile-money/:transactionId` | JWT + droit « Frais » | Suivi du paiement |
+| GET | `/api/admin/overview` | droit « Consultation » | Classes (titulaire, effectif), bureaux, personnel, rôles attribuables, matières |
+| POST / PATCH / DELETE | `/api/admin/classes[/:id]` | droit « Classes » | Classes ; nom unique (409) ; suppression seulement si aucun élève |
+| POST / PATCH | `/api/admin/users[/:id]` | droit « Personnel » | Comptes Préfet / Directeur / D.E. / D.D. / Comptable / Enseignant, bureau, mot de passe (bcrypt 12), activation |
+| POST / PATCH | `/api/admin/subjects[/:id]` | droit « Classes » | Matières et note maximale par défaut |
+| GET | `/api/admin/students?classId=&q=&status=&page=` | droit « Consultation » | Liste paginée + reste à payer |
+| GET | `/api/admin/students/:id` | droit « Consultation » | Fiche : frais, paiements, assiduité |
+| POST / PATCH | `/api/admin/students[/:id]` | droit « Inscriptions » | Inscription (matricule auto, frais de la classe), transfert, désinscription |
+| POST | `/api/admin/students/import` | droit « Inscriptions » | Import CSV `{classId, csv, dryRun}` (1 000 lignes max, tout ou rien) |
+| GET | `/api/admin/fees/summary` | droit « Consultation » | Synthèse par frais (attendu, encaissé, statuts) |
+| POST | `/api/admin/fees/bulk` | droit « Frais » | Frais pour une ou plusieurs classes (idempotent) |
+| PATCH | `/api/admin/fees/:id` | droit « Frais » | Remise / report ; montant dû ≥ déjà payé ; statut recalculé |
 
 ### Synchronisation des présences
 
@@ -248,9 +280,9 @@ Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et 
 
   « Vérifier le fichier » fait une simulation (`dryRun`) qui liste les erreurs ligne par ligne : téléphone invalide, sexe inconnu, matricule en double ou déjà pris. L'import réel est transactionnel : tout le fichier passe, ou rien n'est écrit.
 - **Désinscription** plutôt que suppression : l'élève disparaît des listes d'appel et des statistiques, mais son historique (présences, cotes, paiements) est conservé.
-- **Enseignants** : un compte créé ici peut se connecter immédiatement sur l'application mobile. Il retrouve ses classes après « Recharger ». Désactiver un enseignant bloque sa connexion et laisse ses classes « sans titulaire ».
+- **Personnel** : choisissez le rôle (Préfet, Directeur, D.E., D.D., Comptable, Enseignant) et le bureau. Un compte enseignant créé ici peut se connecter immédiatement sur l'application mobile. Il retrouve ses classes après « Recharger ». Désactiver un enseignant bloque sa connexion et laisse ses classes « sans titulaire ».
 - **Frais** : la création groupée ne facture jamais deux fois le même libellé à un élève. Une remise ou un report d'échéance recalcule le statut Soldé / En cours / Insolvable.
-- En **mode démonstration**, ces onglets affichent un message, car ils ont besoin de l'API.
+- Les boutons d'action n'apparaissent que si le rôle connecté en a le droit (voir 2bis). L'API applique les mêmes règles.
 
 ---
 

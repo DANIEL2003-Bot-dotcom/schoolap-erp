@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { fromDbDate, toDbDate, todayIn } from '../utils/dates.js';
 
 /**
@@ -9,7 +9,7 @@ import { fromDbDate, toDbDate, todayIn } from '../utils/dates.js';
  */
 export function teacherRouter({ prisma, config }) {
   const router = Router();
-  router.use(requireAuth({ prisma, config }), requireRole('TEACHER', 'DIRECTOR', 'ADMIN'));
+  router.use(requireAuth({ prisma, config }), requirePermission('TAKE_ATTENDANCE'));
 
   router.get('/bootstrap', async (req, res) => {
     const user = req.user;

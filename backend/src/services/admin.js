@@ -5,6 +5,7 @@ import { fromDbDate, isValidIsoDate, schoolYearOf, toDbDate, todayIn } from '../
 import { normalizeDrcPhone } from '../utils/phone.js';
 import { studentFullName } from '../utils/names.js';
 import { computeFeeStatus } from './fees.js';
+import { BCRYPT_COST, OFFICE_CODES, PASSWORD_MESSAGE, PASSWORD_RULE, ROLES, ROLE_CODES, assignableRoles, defaultOfficeFor, ensureOffices } from './roles.js';
 
 /* =============================================================================
    Gestion administrative : classes, enseignants / personnel, matières, élèves
@@ -49,17 +50,28 @@ const classSchema = z.object({
 });
 const classPatchSchema = classSchema.partial().refine((v) => Object.keys(v).length > 0, 'Aucun champ à modifier.');
 
+const passwordField = z
+  .string({ error: 'Mot de passe obligatoire.' })
+  .min(PASSWORD_RULE.min, PASSWORD_MESSAGE)
+  .max(PASSWORD_RULE.max)
+  .regex(PASSWORD_RULE.pattern, PASSWORD_MESSAGE);
+const roleField = z.enum(ROLE_CODES, { error: 'Rôle inconnu.' });
+const officeField = z.enum(OFFICE_CODES, { error: 'Bureau inconnu.' });
+
 const userSchema = z.object({
   fullName: trimmed('Le nom complet', 120),
   phone: phoneField,
-  role: z.enum(['TEACHER', 'BURSAR', 'DIRECTOR'], { error: 'Rôle : TEACHER, BURSAR ou DIRECTOR.' }),
-  password: z.string({ error: 'Mot de passe obligatoire.' }).min(8, 'Mot de passe : 8 caractères minimum.').max(128),
+  role: roleField,
+  office: officeField.optional(),
+  password: passwordField,
 });
 const userPatchSchema = z
   .object({
     fullName: trimmed('Le nom complet', 120).optional(),
+    role: roleField.optional(),
+    office: officeField.optional(),
     isActive: z.boolean().optional(),
-    password: z.string().min(8, 'Mot de passe : 8 caractères minimum.').max(128).optional(),
+    password: passwordField.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'Aucun champ à modifier.');
 
@@ -318,6 +330,7 @@ export function createAdminService({ prisma, config }) {
   return {
     // =========================================================== Référentiel
     async overview(user) {
+      const offices = await ensureOffices(prisma, user.schoolId);
       const [classes, staff, subjects] = await Promise.all([
         prisma.class.findMany({
           where: { schoolId: user.schoolId },
@@ -327,7 +340,7 @@ export function createAdminService({ prisma, config }) {
         prisma.user.findMany({
           where: { schoolId: user.schoolId },
           orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
-          select: { id: true, fullName: true, phone: true, role: true, isActive: true, _count: { select: { classesTaught: true } } },
+          select: { id: true, fullName: true, phone: true, role: true, isActive: true, officeId: true, _count: { select: { classesTaught: true } } },
         }),
         prisma.subject.findMany({ where: { schoolId: user.schoolId }, orderBy: { name: 'asc' } }),
       ]);
@@ -342,7 +355,29 @@ export function createAdminService({ prisma, config }) {
           teacherName: c.teacher?.fullName ?? null,
           studentCount: c._count.students,
         })),
-        staff: staff.map((u) => ({ id: u.id, fullName: u.fullName, phone: u.phone, role: u.role, isActive: u.isActive, classCount: u._count.classesTaught })),
+        staff: staff.map((u) => {
+          const office = offices.find((o) => o.id === u.officeId);
+          return {
+            id: u.id,
+            fullName: u.fullName,
+            phone: u.phone,
+            role: u.role,
+            roleLabel: ROLES[u.role]?.label ?? u.role,
+            office: office?.code ?? null,
+            officeName: office?.name ?? null,
+            isActive: u.isActive,
+            classCount: u._count.classesTaught,
+          };
+        }),
+        offices: offices.map((o) => ({
+          id: o.id,
+          code: o.code,
+          name: o.name,
+          description: o.description,
+          members: staff.filter((u) => u.officeId === o.id && u.isActive).length,
+        })),
+        roles: ROLE_CODES.map((code) => ({ code, label: ROLES[code].label, short: ROLES[code].short, defaultOffice: ROLES[code].office })),
+        assignableRoles: assignableRoles(user.role),
         subjects: subjects.map((s) => ({ id: s.id, name: s.name, defaultMaxScore: Number(s.defaultMaxScore) })),
       };
     },
@@ -401,15 +436,28 @@ export function createAdminService({ prisma, config }) {
     },
 
     // ============================================================ Personnel
+    /**
+     * Création d'un compte du personnel par l'administration.
+     * Le mot de passe n'est jamais stocké en clair : hachage bcrypt (coût 12, sel aléatoire).
+     */
     async createUser(user, body) {
       const input = parseOrThrow(userSchema, body, 'Compte invalide.');
-      if (input.role === 'DIRECTOR' && user.role !== 'ADMIN' && user.role !== 'DIRECTOR') throw forbidden('Rôle non autorisé.');
+      if (!assignableRoles(user.role).includes(input.role)) throw forbidden(`Vous ne pouvez pas créer un compte « ${ROLES[input.role].label} ».`);
+      const offices = await ensureOffices(prisma, user.schoolId);
+      const office = offices.find((o) => o.code === (input.office ?? defaultOfficeFor(input.role)));
       try {
         const created = await prisma.user.create({
-          data: { schoolId: user.schoolId, fullName: input.fullName, phone: input.phone, role: input.role, passwordHash: await bcrypt.hash(input.password, 10) },
+          data: {
+            schoolId: user.schoolId,
+            fullName: input.fullName,
+            phone: input.phone,
+            role: input.role,
+            officeId: office.id,
+            passwordHash: await bcrypt.hash(input.password, BCRYPT_COST),
+          },
           select: { id: true, fullName: true, phone: true, role: true, isActive: true },
         });
-        return { user: created };
+        return { user: { ...created, roleLabel: ROLES[created.role].label, office: office.code, officeName: office.name } };
       } catch (e) {
         if (isUniqueViolation(e)) throw conflict('Ce numéro de téléphone est déjà utilisé par un compte.');
         throw e;
@@ -420,23 +468,37 @@ export function createAdminService({ prisma, config }) {
       const input = parseOrThrow(userPatchSchema, body, 'Modification invalide.');
       const target = await prisma.user.findFirst({ where: { id: userId, schoolId: user.schoolId } });
       if (!target) throw notFound('Compte introuvable.');
-      if (target.id === user.id && input.isActive === false) throw badRequest('Vous ne pouvez pas désactiver votre propre compte.');
+      const self = target.id === user.id;
+      if (self && input.isActive === false) throw badRequest('Vous ne pouvez pas désactiver votre propre compte.');
+      if (self && input.role && input.role !== target.role) throw badRequest('Vous ne pouvez pas modifier votre propre rôle.');
       if (target.role === 'ADMIN' && user.role !== 'ADMIN') throw forbidden('Seul un administrateur peut modifier ce compte.');
+      if (input.role && input.role !== target.role && !assignableRoles(user.role).includes(input.role)) {
+        throw forbidden(`Vous ne pouvez pas attribuer le rôle « ${ROLES[input.role].label} ».`);
+      }
+      const offices = await ensureOffices(prisma, user.schoolId);
+      const newRole = input.role ?? target.role;
+      const officeCode = input.office ?? (input.role && input.role !== target.role ? defaultOfficeFor(input.role) : undefined);
+      const office = officeCode ? offices.find((o) => o.code === officeCode) : undefined;
+
       const updated = await prisma.$transaction(async (db) => {
         const u = await db.user.update({
           where: { id: userId },
           data: {
             ...(input.fullName ? { fullName: input.fullName } : {}),
+            ...(input.role ? { role: input.role } : {}),
+            ...(office ? { officeId: office.id } : {}),
             ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-            ...(input.password ? { passwordHash: await bcrypt.hash(input.password, 10) } : {}),
+            ...(input.password ? { passwordHash: await bcrypt.hash(input.password, BCRYPT_COST) } : {}),
           },
-          select: { id: true, fullName: true, phone: true, role: true, isActive: true },
+          select: { id: true, fullName: true, phone: true, role: true, isActive: true, officeId: true },
         });
-        // Un enseignant désactivé libère ses classes (qui apparaissent « sans titulaire »).
-        if (input.isActive === false && target.role === 'TEACHER') await db.class.updateMany({ where: { teacherId: userId }, data: { teacherId: null } });
+        // Un enseignant désactivé ou affecté à un autre rôle libère ses classes (« sans titulaire »).
+        const leavesTeaching = target.role === 'TEACHER' && (input.isActive === false || newRole !== 'TEACHER');
+        if (leavesTeaching) await db.class.updateMany({ where: { teacherId: userId }, data: { teacherId: null } });
         return u;
       });
-      return { user: updated };
+      const o = offices.find((x) => x.id === updated.officeId);
+      return { user: { ...updated, roleLabel: ROLES[updated.role].label, office: o?.code ?? null, officeName: o?.name ?? null } };
     },
 
     // ============================================================= Matières

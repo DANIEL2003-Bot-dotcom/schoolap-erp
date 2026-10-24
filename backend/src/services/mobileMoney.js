@@ -100,7 +100,8 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
   }
 
   return {
-    async initiate(body) {
+    /** `user` (facultatif) : limite le paiement aux frais de l'école de l'agent connecté. */
+    async initiate(body, user = null) {
       const input = parseOrThrow(initSchema, body, 'Demande de paiement invalide.');
 
       const phone = normalizeDrcPhone(input.phone);
@@ -117,7 +118,7 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
       const fee = await prisma.schoolFee.findUnique({ where: { id: input.schoolFeeId }, include: { student: true } });
       const studentMatches =
         fee && (input.studentId ? fee.studentId === input.studentId : fee.student.matricule === input.matricule);
-      if (!fee || !studentMatches) throw notFound('Frais introuvable pour cet élève.');
+      if (!fee || !studentMatches || (user && fee.student.schoolId !== user.schoolId)) throw notFound('Frais introuvable pour cet élève.');
 
       const remaining = Number((Number(fee.amountDue) - Number(fee.amountPaid)).toFixed(2));
       if (remaining <= 0) throw conflict('Ce frais est déjà soldé.');
@@ -277,9 +278,9 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
       };
     },
 
-    async getStatus(transactionId) {
-      const tx = await prisma.transaction.findUnique({ where: { transactionId }, include: { schoolFee: true } });
-      if (!tx) throw notFound('Transaction inconnue.');
+    async getStatus(transactionId, user = null) {
+      const tx = await prisma.transaction.findUnique({ where: { transactionId }, include: { schoolFee: true, student: { select: { schoolId: true } } } });
+      if (!tx || (user && tx.student.schoolId !== user.schoolId)) throw notFound('Transaction inconnue.');
       return {
         transactionId: tx.transactionId,
         reference: tx.reference,

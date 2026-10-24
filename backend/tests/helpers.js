@@ -29,7 +29,7 @@ export function createPrisma() {
 
 export async function resetDatabase(prisma) {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE sms_logs, transactions, school_fees, grades, attendance, subjects, students, classes, users, schools RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE sms_logs, transactions, school_fees, grades, attendance, subjects, students, classes, users, offices, schools RESTART IDENTITY CASCADE',
   );
   return runSeed(prisma, {
     log: () => {},

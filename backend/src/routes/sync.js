@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 
 /** POST /api/attendance/sync et POST /api/grades/sync (application mobile). */
 export function syncRouters({ prisma, config, attendanceService, gradesService }) {
-  const auth = [requireAuth({ prisma, config }), requireRole('TEACHER', 'DIRECTOR', 'ADMIN')];
+  const authenticate = requireAuth({ prisma, config });
   const limiter = rateLimit({
     windowMs: 60_000,
     limit: config.isTest ? 10_000 : 60,
@@ -16,13 +16,13 @@ export function syncRouters({ prisma, config, attendanceService, gradesService }
   });
 
   const attendance = Router();
-  attendance.post('/sync', ...auth, limiter, async (req, res) => {
+  attendance.post('/sync', authenticate, requirePermission('TAKE_ATTENDANCE'), limiter, async (req, res) => {
     const result = await attendanceService.syncBatch(req.user, req.body);
     res.status(200).json({ success: true, ...result });
   });
 
   const grades = Router();
-  grades.post('/sync', ...auth, limiter, async (req, res) => {
+  grades.post('/sync', authenticate, requirePermission('ENTER_GRADES'), limiter, async (req, res) => {
     const result = await gradesService.syncBatch(req.user, req.body);
     res.status(200).json({ success: true, ...result });
   });

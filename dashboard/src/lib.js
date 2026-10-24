@@ -119,3 +119,49 @@ export async function apiFetch(path, { token, method = 'GET', body, onSlow, time
     if (onSlow) onSlow(false);
   }
 }
+
+/* ------------------------------------------------- Structure EPST et droits */
+
+/** Libellés officiels des rôles (miroir de backend/src/services/roles.js). */
+export const ROLE_LABELS = {
+  ADMIN: 'Administrateur',
+  PREFET: 'Préfet des études',
+  DIRECTOR: 'Directeur',
+  DIRECTEUR_ETUDES: 'Directeur des études (D.E.)',
+  DIRECTEUR_DISCIPLINE: 'Directeur de discipline (D.D.)',
+  BURSAR: 'Comptable',
+  TEACHER: 'Enseignant',
+};
+
+/** Capacités → rôles autorisés (l'API reste l'autorité : ceci ne sert qu'à masquer les actions). */
+export const PERMISSIONS = {
+  MANAGE_STAFF: ['ADMIN', 'PREFET', 'DIRECTOR'],
+  MANAGE_ACADEMIC: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES'],
+  MANAGE_STUDENTS: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'BURSAR'],
+  MANAGE_FEES: ['ADMIN', 'PREFET', 'DIRECTOR', 'BURSAR'],
+  VIEW_SCHOOL: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE', 'BURSAR'],
+};
+
+export const can = (user, permission) => Boolean(user && PERMISSIONS[permission]?.includes(user.role));
+
+/** Règle de robustesse identique à l'API : 8 caractères, au moins une lettre et un chiffre. */
+export const PASSWORD_HINT = '8 caractères minimum, avec au moins une lettre et un chiffre.';
+export const isStrongPassword = (value) => value.length >= 8 && /[A-Za-zÀ-ÿ]/.test(value) && /\d/.test(value);
+
+/** Date d'expiration (ms) d'un JWT, ou null s'il est illisible. Aucune vérification de signature : c'est le rôle de l'API. */
+export function tokenExpiry(token) {
+  try {
+    const part = String(token).split('.')[1];
+    if (!part) return null;
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '='));
+    const { exp } = JSON.parse(json);
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+export const isTokenUsable = (token) => {
+  const exp = tokenExpiry(token);
+  return exp !== null && exp - Date.now() > 5_000;
+};

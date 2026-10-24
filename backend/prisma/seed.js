@@ -1,9 +1,10 @@
 /**
- * Données de démonstration — « Institut Mwanga » (Goma, Nord-Kivu).
+ * Données initiales — « Institut Mwanga » (Goma, Nord-Kivu).
  * Idempotent : si l'école (code EPST) existe déjà, rien n'est modifié.
  *   node prisma/seed.js
  */
 import { randomUUID } from 'node:crypto';
+import { ensureOffices } from '../src/services/roles.js';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
@@ -92,15 +93,18 @@ export async function runSeed(prisma, opts = {}) {
         data: { name: 'Institut Mwanga', province: 'NORD_KIVU', epstCode: SEED_EPST_CODE, city: 'Goma', phone: '+243990000100' },
       });
 
+      // Structure EPST : 5 bureaux (Direction, Études, Discipline, Comptabilité, Salle des profs)
+      const offices = Object.fromEntries((await ensureOffices(tx, school.id)).map((o) => [o.code, o.id]));
+
       const users = {};
       users.director = await tx.user.create({
-        data: { schoolId: school.id, ...SEED_USERS.director, passwordHash: directorHash, role: 'DIRECTOR' },
+        data: { schoolId: school.id, ...SEED_USERS.director, passwordHash: directorHash, role: 'DIRECTOR', officeId: offices.DIRECTION },
       });
       users.teacher1 = await tx.user.create({
-        data: { schoolId: school.id, ...SEED_USERS.teacher1, passwordHash: teacherHash, role: 'TEACHER' },
+        data: { schoolId: school.id, ...SEED_USERS.teacher1, passwordHash: teacherHash, role: 'TEACHER', officeId: offices.SALLE_DES_PROFS },
       });
       users.teacher2 = await tx.user.create({
-        data: { schoolId: school.id, ...SEED_USERS.teacher2, passwordHash: teacherHash, role: 'TEACHER' },
+        data: { schoolId: school.id, ...SEED_USERS.teacher2, passwordHash: teacherHash, role: 'TEACHER', officeId: offices.SALLE_DES_PROFS },
       });
 
       await tx.subject.createMany({ data: SUBJECTS.map((s) => ({ ...s, schoolId: school.id })) });

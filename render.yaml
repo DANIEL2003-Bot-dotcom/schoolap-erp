@@ -52,7 +52,7 @@ services:
         value: ECOLE-RDC
       - key: LOG_REQUESTS
         value: "true"
-      # Mots de passe des comptes de démonstration (demandés lors de la création du Blueprint)
+      # Mots de passe des comptes initiaux (demandés lors de la création du Blueprint)
       - key: SEED_DIRECTOR_PASSWORD
         sync: false
       - key: SEED_TEACHER_PASSWORD

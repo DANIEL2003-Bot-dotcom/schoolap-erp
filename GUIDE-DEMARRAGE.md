@@ -99,7 +99,7 @@ Dans le terminal, depuis le dossier `schoolap-erp` :
 cd backend
 copy .env.example .env        # Linux/macOS : cp .env.example .env
 npm install                   # 2 à 5 minutes la première fois
-npm run db:setup:local        # crée les tables et les données de démonstration
+npm run db:setup:local        # crée les tables, les 5 bureaux et les données initiales
 npm run dev
 ```
 
@@ -166,7 +166,7 @@ Connectez-vous avec un compte enseignant :
 
 L'adresse du serveur peut aussi être changée plus tard sur l'écran de connexion (**Paramètres du serveur**).
 
-### A5. Scénario de démonstration complet (5 minutes)
+### A5. Scénario de prise en main complet (5 minutes)
 
 1. **Mobile** : connectez-vous avec Kambale Jean et ouvrez **5e Primaire A**. L'appel du jour est volontairement vide.
 2. Mettez deux élèves en **Absent** (interrupteur rouge), puis enregistrez.
@@ -236,7 +236,7 @@ flutter test                   # 15 tests
    |---|---|
    | `CORS_ORIGINS` | `https://votre-compte.github.io` en **minuscules**, **sans** `/schoolap-erp` et **sans** `/` final |
    | `SEED_DIRECTOR_PASSWORD` | Un mot de passe solide pour le compte Directeur |
-   | `SEED_TEACHER_PASSWORD` | Un mot de passe pour les comptes enseignants de démonstration |
+   | `SEED_TEACHER_PASSWORD` | Un mot de passe pour les comptes enseignants initiaux |
 
 5. Cliquez sur **Apply** (ou **Deploy Blueprint**). Le premier déploiement prend 5 à 10 minutes. Suivez-le dans *schoolap-erp-api → Logs* : vous devez voir les migrations, le seed, puis `API ERP scolaire démarrée`.
 6. **Copiez l'URL du service**, affichée en haut de la page *schoolap-erp-api*. C'est normalement `https://schoolap-erp-api.onrender.com`, mais Render ajoute un suffixe si ce nom est déjà pris.
@@ -283,7 +283,8 @@ Le fichier se trouve dans `mobile\build\app\outputs\flutter-apk\app-release.apk`
 
 1. **Changer les mots de passe** : connectez-vous comme Directeur, puis **Classes & personnel → Personnel → Modifier**. Donnez un nouveau mot de passe à chaque enseignant.
 2. **Créer vos vrais comptes, classes et élèves** dans les onglets **Classes & personnel** et **Élèves**. L'import CSV depuis Excel se fait via « Enregistrer sous → CSV UTF-8 ».
-3. **Désactiver les comptes de démonstration** dont vous n'avez pas besoin.
+3. **Désactiver les comptes initiaux** dont vous n'avez pas besoin.
+4. **Créer l'équipe administrative** (Préfet, D.E., D.D., Comptable) via **+ Nouveau compte**. Chaque rôle est rattaché automatiquement à son bureau (tableau des droits : README, section 2bis).
 
 ### B6. Mettre à jour l'application plus tard
 

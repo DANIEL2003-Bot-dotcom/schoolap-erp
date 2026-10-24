@@ -16,13 +16,18 @@ import {
   normalizePhone,
   detectOperator,
   initials,
-  ApiError,
   apiFetch,
+  can,
+  ROLE_LABELS,
+  tokenExpiry,
+  isTokenUsable,
 } from './lib.js';
+import { PASSWORD_CSS, PasswordInput } from './ui.jsx';
 
 /* =============================================================================
    ERP SCOLAIRE RDC — Tableau de bord du Directeur
-   - Connexion (JWT stocké en sessionStorage) ou mode démonstration hors-ligne
+   - Accès verrouillé : sans jeton JWT valide (vérifié par l'API), seul l'écran de connexion s'affiche
+   - Droits selon la structure EPST (Préfet, Directeur, D.E., D.D., Comptable)
    - KPI : taux de présence du jour, absents, taux de recouvrement, SMS envoyés
    - Tableau des absences avec badge « SMS envoyé »
    - Tableau des insolvables : « Relancer par SMS » + encaissement Mobile Money
@@ -34,218 +39,10 @@ const REMINDER_COOLDOWN_MS = 24 * 3_600_000;
 
 function createLiveApi(token, onSlow) {
   return {
-    mode: 'live',
     summary: (date) => apiFetch(`/api/dashboard/summary?date=${date}`, { token, onSlow }),
     remind: (feeId) => apiFetch(`/api/fees/${feeId}/remind`, { token, method: 'POST', onSlow }),
-    initiatePayment: (body) => apiFetch('/api/payments/mobile-money', { method: 'POST', body, onSlow }),
-    paymentStatus: (transactionId) => apiFetch(`/api/payments/mobile-money/${encodeURIComponent(transactionId)}`),
-  };
-}
-
-/* ---------------------------------------------------- Mode démonstration local */
-
-function seededRandom(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function buildDemoStore() {
-  const rand = seededRandom(2026);
-  const pick = (arr) => arr[Math.floor(rand() * arr.length)];
-  const today = todayIso();
-  const last = ['Kambale', 'Kahindo', 'Paluku', 'Masika', 'Mumbere', 'Kavugho', 'Muhindo', 'Kasereka', 'Mbusa', 'Vahwere', 'Sikuli', 'Kakule', 'Bahati', 'Katembo'];
-  const middle = ['Siwako', 'Mutsunga', 'Vyakuno', 'Kasongo', 'Lukando', 'Nzanzu', 'Kitsa', 'Malyabo', 'Mwenge', 'Kasika'];
-  const firstM = ['Jonathan', 'Daniel', 'Patient', 'Josué', 'Emmanuel', 'Christian', 'Moïse', 'Héritier', 'Samuel'];
-  const firstF = ['Grâce', 'Esther', 'Sarah', 'Divine', 'Merveille', 'Ruth', 'Gloire', 'Joëlle', 'Rachel'];
-  const prefixes = ['81', '82', '84', '85', '89', '97', '99'];
-  const classes = [
-    { id: 'c1', name: '5e Primaire A', teacher: 'Kambale Jean', size: 14, done: false },
-    { id: 'c2', name: '4e Humanités Scientifique', teacher: 'Kambale Jean', size: 13, done: true },
-    { id: 'c3', name: '3e Humanités Commerciale', teacher: 'Kavira Esther', size: 15, done: true },
-  ];
-  const students = [];
-  let n = 0;
-  for (const c of classes) {
-    for (let i = 1; i <= c.size; i += 1) {
-      n += 1;
-      const female = rand() < 0.5;
-      students.push({
-        id: `s${n}`,
-        classId: c.id,
-        className: c.name,
-        matricule: `MWG-2026-${c.id.toUpperCase()}-${String(i).padStart(3, '0')}`,
-        studentName: `${pick(last).toUpperCase()} ${pick(middle).toUpperCase()} ${pick(female ? firstF : firstM)}`,
-        guardianPhone: `+243${prefixes[n % prefixes.length]}${String(1000000 + n * 7919).slice(-7)}`,
-        status: c.done ? (rand() < 0.08 ? 'ABSENT' : 'PRESENT') : null,
-        smsSentAt: null,
-      });
-    }
-  }
-  students.forEach((s) => {
-    if (s.status === 'ABSENT') s.smsSentAt = new Date(Date.now() - (2 + rand() * 2) * 3_600_000).toISOString();
-  });
-  const fees = [];
-  for (const s of students) {
-    const plans = [
-      { label: 'Inscription 2026-2027', due: 20, dueDate: addDaysIso(today, -30), paid: rand() < 0.9 ? 20 : 0 },
-      { label: 'Frais scolaires T1', due: 60, dueDate: addDaysIso(today, -9), paid: [60, 60, 60, 60, 40, 25, 0][Math.floor(rand() * 7)] },
-      { label: 'Frais scolaires T2', due: 60, dueDate: addDaysIso(today, 80), paid: rand() < 0.15 ? 30 : 0 },
-    ];
-    plans.forEach((p, k) =>
-      fees.push({ feeId: `f${s.id}-${k}`, student: s, label: p.label, amountDue: p.due, amountPaid: p.paid, dueDate: p.dueDate, currency: 'USD', lastReminderAt: null }),
-    );
-  }
-  return { today, classes, students, fees, smsToday: students.filter((s) => s.smsSentAt).length, transactions: new Map() };
-}
-
-function createDemoApi() {
-  const store = buildDemoStore();
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const statusOf = (f, today) => (f.amountPaid >= f.amountDue ? 'SOLDE' : f.dueDate < today ? 'INSOLVABLE' : 'EN_COURS');
-
-  return {
-    mode: 'demo',
-    async summary(date) {
-      await wait(250);
-      const isToday = date === store.today;
-      const classRows = store.classes.map((c) => {
-        const list = store.students.filter((s) => s.classId === c.id);
-        const present = isToday ? list.filter((s) => s.status === 'PRESENT').length : 0;
-        const absent = isToday ? list.filter((s) => s.status === 'ABSENT').length : 0;
-        return { id: c.id, name: c.name, teacher: c.teacher, enrolled: list.length, present, absent, rollCallDone: present + absent > 0 };
-      });
-      const present = classRows.reduce((s, c) => s + c.present, 0);
-      const absent = classRows.reduce((s, c) => s + c.absent, 0);
-      const exigible = store.fees.filter((f) => f.dueDate <= date);
-      const due = exigible.reduce((s, f) => s + f.amountDue, 0);
-      const paid = exigible.reduce((s, f) => s + f.amountPaid, 0);
-      return {
-        date,
-        generatedAt: new Date().toISOString(),
-        school: { name: 'Institut Mwanga (démo)', city: 'Goma', province: 'NORD_KIVU', epstCode: 'NK1-GOMA-0427' },
-        schoolYear: '2026-2027',
-        attendance: {
-          enrolled: classRows.reduce((s, c) => s + c.enrolled, 0),
-          present,
-          absent,
-          marked: present + absent,
-          rate: present + absent > 0 ? present / (present + absent) : null,
-          classesPending: classRows.filter((c) => !c.rollCallDone).map((c) => c.name),
-          classes: classRows,
-        },
-        finance: [{ currency: 'USD', due, paid, outstanding: due - paid, recoveryRate: due > 0 ? paid / due : null }],
-        smsSentToday: isToday ? store.smsToday : 0,
-        absents: isToday
-          ? store.students
-              .filter((s) => s.status === 'ABSENT')
-              .map((s) => ({
-                attendanceId: `a-${s.id}`,
-                studentId: s.id,
-                matricule: s.matricule,
-                studentName: s.studentName,
-                className: s.className,
-                guardianPhone: s.guardianPhone,
-                smsSent: Boolean(s.smsSentAt),
-                smsSentAt: s.smsSentAt,
-              }))
-          : [],
-        insolvents: store.fees
-          .filter((f) => statusOf(f, store.today) === 'INSOLVABLE')
-          .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.student.studentName.localeCompare(b.student.studentName))
-          .map((f) => ({
-            feeId: f.feeId,
-            studentId: f.student.id,
-            matricule: f.student.matricule,
-            studentName: f.student.studentName,
-            className: f.student.className,
-            guardianPhone: f.student.guardianPhone,
-            label: f.label,
-            feeType: 'FRAIS_SCOLAIRES',
-            amountDue: f.amountDue,
-            amountPaid: f.amountPaid,
-            remaining: f.amountDue - f.amountPaid,
-            currency: f.currency,
-            dueDate: f.dueDate,
-            lastReminderAt: f.lastReminderAt,
-          })),
-      };
-    },
-    async remind(feeId) {
-      await wait(400);
-      const fee = store.fees.find((f) => f.feeId === feeId);
-      if (!fee) throw new ApiError(404, 'NOT_FOUND', 'Frais introuvable.');
-      if (fee.amountPaid >= fee.amountDue) throw new ApiError(409, 'CONFLICT', 'Ce frais est déjà soldé.');
-      if (fee.lastReminderAt && Date.now() - Date.parse(fee.lastReminderAt) < REMINDER_COOLDOWN_MS) {
-        const nextAllowedAt = new Date(Date.parse(fee.lastReminderAt) + REMINDER_COOLDOWN_MS).toISOString();
-        throw new ApiError(429, 'TOO_MANY_REQUESTS', 'Une relance a déjà été envoyée il y a moins de 24 h.', { nextAllowedAt });
-      }
-      fee.lastReminderAt = new Date().toISOString();
-      store.smsToday += 1;
-      const remaining = fee.amountDue - fee.amountPaid;
-      return {
-        feeId,
-        remaining,
-        currency: fee.currency,
-        remindedAt: fee.lastReminderAt,
-        sms: {
-          status: 'sent',
-          providerId: `SMS-DEMO-${store.smsToday}`,
-          message: `Rappel École : solde impayé de ${remaining.toFixed(2)} USD (${fee.label}) pour ${fee.student.studentName}, échéance du ${formatShortDate(fee.dueDate)}. Payez via M-Pesa, Orange Money ou Airtel Money.`,
-        },
-      };
-    },
-    async initiatePayment(body) {
-      await wait(500);
-      const fee = store.fees.find((f) => f.feeId === body.schoolFeeId);
-      if (!fee) throw new ApiError(404, 'NOT_FOUND', 'Frais introuvable.');
-      const remaining = fee.amountDue - fee.amountPaid;
-      if (body.amount > remaining) throw new ApiError(400, 'VALIDATION_ERROR', `Le montant dépasse le reste à payer (${remaining.toFixed(2)} USD).`);
-      if (detectOperator(body.phone) !== body.operator) {
-        throw new ApiError(400, 'VALIDATION_ERROR', `Ce numéro n’est pas un numéro ${OPERATORS[body.operator].name}.`);
-      }
-      const transactionId = `TX-${store.today.replaceAll('-', '')}-DEMO${String(store.transactions.size + 1).padStart(4, '0')}`;
-      const tx = { transactionId, status: 'PENDING', amount: body.amount, operator: body.operator, fee, createdAt: Date.now(), failureReason: null };
-      store.transactions.set(transactionId, tx);
-      setTimeout(() => {
-        if (Math.random() < 0.1) {
-          tx.status = 'FAILED';
-          tx.failureReason = 'Solde insuffisant';
-        } else {
-          tx.status = 'SUCCESS';
-          fee.amountPaid += body.amount;
-          store.smsToday += 1;
-        }
-      }, 2500);
-      return {
-        transactionId,
-        reference: `DEMO${Date.now().toString(36).toUpperCase()}`,
-        status: 'PENDING',
-        operator: body.operator,
-        amount: body.amount,
-        currency: 'USD',
-        student: fee.student.studentName,
-        message: `Confirmez le paiement de ${body.amount.toFixed(2)} USD sur votre téléphone ${OPERATORS[body.operator].name} en saisissant votre code PIN.`,
-      };
-    },
-    async paymentStatus(transactionId) {
-      await wait(150);
-      const tx = store.transactions.get(transactionId);
-      if (!tx) throw new ApiError(404, 'NOT_FOUND', 'Transaction inconnue.');
-      return {
-        transactionId,
-        status: tx.status,
-        amount: tx.amount,
-        currency: 'USD',
-        failureReason: tx.failureReason,
-        fee: { id: tx.fee.feeId, label: tx.fee.label, status: statusOf(tx.fee, store.today), remaining: tx.fee.amountDue - tx.fee.amountPaid },
-      };
-    },
+    initiatePayment: (body) => apiFetch('/api/payments/mobile-money', { token, method: 'POST', body, onSlow }),
+    paymentStatus: (transactionId) => apiFetch(`/api/payments/mobile-money/${encodeURIComponent(transactionId)}`, { token }),
   };
 }
 
@@ -294,8 +91,6 @@ button:disabled{cursor:not-allowed;opacity:.6}
 .btn-danger:hover:not(:disabled){background:#A61F1F}
 .btn-sm{height:34px;padding:0 12px;font-size:13px;border-radius:8px}
 .btn-block{width:100%}
-.divider{display:flex;align-items:center;gap:12px;color:var(--grey-500);font-size:12px;margin:18px 0}
-.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--grey-200)}
 .alert{border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:16px;line-height:1.45}
 .alert-error{background:var(--red-50);color:var(--red-600);border:1px solid #F5C2C2}
 .alert-info{background:var(--navy-100);color:var(--navy-800);border:1px solid #C8D7EE}
@@ -314,7 +109,11 @@ button:disabled{cursor:not-allowed;opacity:.6}
 .btn-top:hover:not(:disabled){background:rgba(255,255,255,.1)}
 .user-chip{display:flex;align-items:center;gap:8px;padding-left:10px;border-left:1px solid rgba(255,255,255,.2)}
 .avatar{width:34px;height:34px;border-radius:50%;background:#fff;color:var(--navy-900);display:grid;place-items:center;font-weight:700;font-size:13px}
-.demo-tag{background:#F59E0B;color:#1F1300;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;letter-spacing:.3px}
+.splash{min-height:100vh;display:grid;place-items:center;padding:24px;background:#F4F6FA}
+.splash-card{background:#fff;border-radius:16px;padding:32px 28px;max-width:420px;width:100%;text-align:center;box-shadow:0 10px 30px rgba(11,37,69,.12)}
+.splash-card .brand-logo{margin:0 auto 14px}
+.splash-card p{color:#5B6B82;margin:8px 0 18px}
+.role-tag{display:block;font-size:11px;opacity:.75}
 
 /* --- Contenu --- */
 .page{max-width:1280px;margin:0 auto;padding:24px}
@@ -444,7 +243,7 @@ const Logo = ({ size = 26 }) => (
 
 /* ------------------------------------------------------------------ Connexion */
 
-function LoginScreen({ onLogin, onDemo }) {
+function LoginScreen({ onLogin }) {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -461,11 +260,11 @@ function LoginScreen({ onLogin, onDemo }) {
     setBusy(true);
     try {
       const data = await apiFetch('/api/auth/login', { method: 'POST', body: { phone, password }, onSlow: setSlow });
-      if (!['DIRECTOR', 'ADMIN', 'BURSAR'].includes(data.user.role)) {
-        setError('Ce tableau de bord est réservé à la direction et à l’économat. Les enseignants utilisent l’application mobile.');
+      if (!can(data.user, 'VIEW_SCHOOL')) {
+        setError('Ce tableau de bord est réservé à l’administration (Préfet, Direction, D.E., D.D., Comptabilité). Les enseignants utilisent l’application mobile.');
         return;
       }
-      onLogin({ token: data.token, user: data.user, school: data.school, mode: 'live' });
+      onLogin({ token: data.token, user: data.user, school: data.school });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -523,15 +322,11 @@ function LoginScreen({ onLogin, onDemo }) {
           </div>
           <div className="field">
             <label htmlFor="password">Mot de passe</label>
-            <input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={4} />
+            <PasswordInput id="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={4} />
           </div>
           <button className="btn btn-primary btn-block" type="submit" disabled={busy || !phone || !password}>
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
             {busy ? 'Connexion…' : 'Se connecter'}
-          </button>
-          <div className="divider">ou</div>
-          <button type="button" className="btn btn-ghost btn-block" onClick={onDemo}>
-            Explorer en mode démonstration
           </button>
           <p className="hint" style={{ marginTop: 14 }}>
             API : {API_URL || 'même origine (proxy de développement)'}
@@ -749,7 +544,8 @@ function Kpi({ tone = '', label, value, foot, bar, barTone }) {
 
 function Dashboard({ session, onLogout }) {
   const [slow, setSlow] = useState(false);
-  const api = useMemo(() => (session.mode === 'demo' ? createDemoApi() : createLiveApi(session.token, setSlow)), [session]);
+  const api = useMemo(() => createLiveApi(session.token, setSlow), [session]);
+  const canCollect = can(session.user, 'MANAGE_FEES');
   const [date, setDate] = useState(todayIso());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -846,7 +642,6 @@ function Dashboard({ session, onLogout }) {
             </div>
           </div>
           <div className="topbar-actions">
-            {session.mode === 'demo' && <span className="demo-tag">DÉMO</span>}
             {tab === 'dashboard' && (
               <>
                 <label className="sr-only" htmlFor="day">
@@ -864,6 +659,10 @@ function Dashboard({ session, onLogout }) {
               </span>
               <span className="user-name" style={{ fontSize: 13 }}>
                 {session.user.fullName}
+                <span className="role-tag">
+                  {session.user.roleLabel ?? ROLE_LABELS[session.user.role]}
+                  {session.user.office ? ` · ${session.user.office.name}` : ''}
+                </span>
               </span>
               <button className="btn-top" onClick={() => onLogout()}>
                 Quitter
@@ -1107,6 +906,7 @@ function Dashboard({ session, onLogout }) {
                           </td>
                           <td data-label="Dernière relance">{lastAt ? <span className="reminded">✓ {formatDateTime(lastAt)}</span> : <span className="muted">Jamais</span>}</td>
                           <td className="full" data-label="Actions">
+                            {canCollect ? (
                             <div className="actions">
                               <button
                                 className="btn btn-sm btn-danger"
@@ -1120,6 +920,9 @@ function Dashboard({ session, onLogout }) {
                                 Encaisser
                               </button>
                             </div>
+                            ) : (
+                              <span className="muted">Réservé à la Comptabilité</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1133,7 +936,7 @@ function Dashboard({ session, onLogout }) {
       )}
 
       <footer>
-        <span>ERP Scolaire RDC · Données {session.mode === 'demo' ? 'de démonstration (locales)' : `en direct — ${API_URL || 'API sur la même origine (proxy)'}`}</span>
+        <span>ERP Scolaire RDC · Données en direct — {API_URL || 'API sur la même origine (proxy)'}</span>
         <span>{tab === 'dashboard' ? 'Actualisation automatique toutes les 60 s' : 'Gestion administrative'}</span>
       </footer>
 
@@ -1156,62 +959,159 @@ function Dashboard({ session, onLogout }) {
 function readSession() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const stored = raw ? JSON.parse(raw) : null;
+    // Toute session sans jeton exploitable (absent, illisible ou expiré) est détruite d'office.
+    if (!stored?.token || !isTokenUsable(stored.token)) {
+      sessionStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return stored;
   } catch {
     return null;
   }
 }
 
+function writeSession(s) {
+  try {
+    if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* stockage indisponible (navigation privée stricte) : session en mémoire uniquement */
+  }
+}
+
+/** Écran d'attente pendant la vérification du jeton auprès de l'API (aucune donnée affichée avant). */
+function SessionCheck({ error, slow, onRetry, onLogout }) {
+  return (
+    <div className="splash">
+      <div className="splash-card" role="status" aria-live="polite">
+        <div className="brand-logo">
+          <Logo />
+        </div>
+        <h2 style={{ margin: 0 }}>{error ? 'Vérification impossible' : 'Vérification de la session…'}</h2>
+        <p>{error || (slow ? 'Le serveur gratuit se réveille… cela peut prendre jusqu’à une minute.' : 'Connexion sécurisée à l’API en cours.')}</p>
+        {error ? (
+          <div className="actions" style={{ justifyContent: 'center' }}>
+            <button className="btn btn-primary" onClick={onRetry}>
+              Réessayer
+            </button>
+            <button className="btn btn-ghost" onClick={() => onLogout()}>
+              Se reconnecter
+            </button>
+          </div>
+        ) : (
+          <span className="spinner" style={{ borderColor: '#C9D6EA', borderTopColor: '#1D4E89' }} aria-hidden="true" />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(readSession);
+  // Une session restaurée depuis le navigateur n'est affichée qu'après validation par GET /api/auth/me.
+  const [verified, setVerified] = useState(false);
+  const [checkError, setCheckError] = useState('');
+  const [checkSlow, setCheckSlow] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [notice, setNotice] = useState('');
 
-  const login = useCallback((s) => {
-    try {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    } catch {
-      /* stockage indisponible (navigation privée stricte) : session en mémoire uniquement */
-    }
-    setNotice('');
-    setSession(s);
-  }, []);
-
   const logout = useCallback((message) => {
-    try {
-      sessionStorage.removeItem(SESSION_KEY);
-    } catch {
-      /* stockage indisponible : rien à effacer */
-    }
+    writeSession(null);
     setSession(null);
+    setVerified(false);
+    setCheckError('');
     setNotice(typeof message === 'string' ? message : '');
   }, []);
 
-  const demo = useCallback(
-    () =>
-      login({
-        mode: 'demo',
-        token: null,
-        user: { fullName: 'Mumbere Paluku Didier', role: 'DIRECTOR' },
-        school: { name: 'Institut Mwanga (démo)', epstCode: 'NK1-GOMA-0427', city: 'Goma' },
-      }),
-    [login],
-  );
+  const login = useCallback((s) => {
+    writeSession(s);
+    setNotice('');
+    setCheckError('');
+    setVerified(true);
+    setSession(s);
+  }, []);
+
+  // Validation serveur du jeton restauré : signature, expiration et compte toujours actif.
+  useEffect(() => {
+    if (!session || verified) return undefined;
+    let cancelled = false;
+    setCheckError('');
+    setCheckSlow(false);
+    apiFetch('/api/auth/me', { token: session.token, onSlow: setCheckSlow })
+      .then((me) => {
+        if (cancelled) return;
+        if (!can(me.user, 'VIEW_SCHOOL')) {
+          logout('Ce compte n’a pas accès au tableau de bord.');
+          return;
+        }
+        const fresh = { token: session.token, user: me.user, school: me.school };
+        writeSession(fresh);
+        setSession(fresh);
+        setVerified(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.status === 401 || err.status === 403) logout('Votre session n’est plus valide. Reconnectez-vous.');
+        else setCheckError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, verified, attempt, logout]);
+
+  // Déconnexion automatique à l'expiration du jeton, y compris au retour sur un onglet resté en veille.
+  useEffect(() => {
+    if (!session) return undefined;
+    const exp = tokenExpiry(session.token);
+    const expire = () => logout('Votre session a expiré. Reconnectez-vous.');
+    if (!exp || exp <= Date.now()) {
+      expire();
+      return undefined;
+    }
+    const timer = setTimeout(expire, Math.min(exp - Date.now(), 2_147_000_000));
+    const onVisible = () => document.visibilityState === 'visible' && !isTokenUsable(session.token) && expire();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [session, logout]);
+
+  // Aucune adresse profonde : tout chemin ou ancre résiduel est ramené à la racine de l'application.
+  useEffect(() => {
+    if (session) return undefined;
+    const clean = () => {
+      if (window.location.hash || window.location.search) window.history.replaceState(null, '', window.location.pathname);
+    };
+    clean();
+    window.addEventListener('hashchange', clean);
+    window.addEventListener('popstate', clean);
+    return () => {
+      window.removeEventListener('hashchange', clean);
+      window.removeEventListener('popstate', clean);
+    };
+  }, [session]);
+
+  let content;
+  if (session && verified) content = <Dashboard session={session} onLogout={logout} />;
+  else if (session) content = <SessionCheck error={checkError} slow={checkSlow} onRetry={() => setAttempt((n) => n + 1)} onLogout={logout} />;
+  else
+    content = (
+      <>
+        {notice && (
+          <div className="alert alert-info" style={{ position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 70, margin: 0 }}>
+            {notice}
+          </div>
+        )}
+        <LoginScreen onLogin={login} />
+      </>
+    );
 
   return (
     <>
-      <style>{CSS + ADMIN_CSS}</style>
-      {session ? (
-        <Dashboard session={session} onLogout={logout} />
-      ) : (
-        <>
-          {notice && (
-            <div className="alert alert-info" style={{ position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 70, margin: 0 }}>
-              {notice}
-            </div>
-          )}
-          <LoginScreen onLogin={login} onDemo={demo} />
-        </>
-      )}
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS}</style>
+      {content}
     </>
   );
 }

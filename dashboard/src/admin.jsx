@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiFetch, formatMoney, formatPct, formatPhone, formatShortDate, normalizePhone, todayIso } from './lib.js';
+import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, formatPhone, formatShortDate, isStrongPassword, normalizePhone, todayIso } from './lib.js';
+import { PasswordInput } from './ui.jsx';
 
 /* =============================================================================
-   Gestion administrative (Direction / Économat)
+   Gestion administrative — structure EPST
+   (Préfet, Directeur, D.E., D.D., Comptable ; boutons masqués selon les droits)
    - Élèves : inscription, modification, transfert, désinscription, fiche
      (frais + paiements), import CSV avec vérification préalable
-   - Classes & personnel : classes et titulaires, comptes enseignants /
-     économat / direction, matières
+   - Classes & personnel : classes et titulaires, bureaux (Direction, Études,
+     Discipline, Comptabilité, Salle des profs), comptes du personnel, matières
    - Frais : synthèse par frais, création groupée par classe, remise / report
    ============================================================================= */
 
-const ROLE_LABELS = { ADMIN: 'Administrateur', DIRECTOR: 'Direction', BURSAR: 'Économat', TEACHER: 'Enseignant' };
 const FEE_TYPES = {
   INSCRIPTION: 'Inscription',
   MINERVAL: 'Minerval',
@@ -35,6 +36,11 @@ const CSV_TEMPLATE =
   'nom;postnom;prenom;sexe;telephone_tuteur;nom_tuteur;matricule\n' + 'Mumbere;Kakule;Fiston;M;0971112233;Papa Mumbere;\n' + 'Kahambu;Vagheni;Aline;F;0841112233;Maman Kahambu;\n';
 
 export const ADMIN_CSS = `
+.offices{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:14px 16px 16px}
+.office{border:1px solid #E3E8F0;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:#FAFBFD}
+.office-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.office small{color:#5B6B82;line-height:1.35}
+.office-people{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
 .tabs{background:#fff;border-bottom:1px solid var(--grey-200);position:sticky;top:64px;z-index:15}
 .tabs-inner{max-width:1280px;margin:0 auto;padding:0 24px;display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
 .tabs-inner::-webkit-scrollbar{display:none}
@@ -370,7 +376,7 @@ function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit }) {
   );
 }
 
-function StudentDetail({ api, studentId, onClose, onEdit, notify, onLogout }) {
+function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, onLogout }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const load = useCallback(() => {
@@ -406,9 +412,11 @@ function StudentDetail({ api, studentId, onClose, onEdit, notify, onLogout }) {
             <button className="btn btn-ghost" onClick={onClose}>
               Fermer
             </button>
-            <button className="btn btn-primary" onClick={() => onEdit(s)}>
-              Modifier la fiche
-            </button>
+            {onEdit && (
+              <button className="btn btn-primary" onClick={() => onEdit(s)}>
+                Modifier la fiche
+              </button>
+            )}
           </>
         )
       }
@@ -458,7 +466,7 @@ function StudentDetail({ api, studentId, onClose, onEdit, notify, onLogout }) {
               </thead>
               <tbody>
                 {data.fees.map((f) => (
-                  <FeeRow key={`${f.id}-${f.amountDue}-${f.dueDate}`} fee={f} api={api} onChanged={load} notify={notify} onLogout={onLogout} canEdit />
+                  <FeeRow key={`${f.id}-${f.amountDue}-${f.dueDate}`} fee={f} api={api} onChanged={load} notify={notify} onLogout={onLogout} canEdit={canEditFees} />
                 ))}
               </tbody>
             </table>
@@ -660,7 +668,7 @@ function fieldErrorsList(err) {
   return Array.isArray(err?.details) ? err.details.map((d) => ({ line: null, message: d.field ? `${d.field} : ${d.message}` : d.message })) : [];
 }
 
-function StudentsTab({ api, refData, notify, onLogout }) {
+function StudentsTab({ api, refData, perms, notify, onLogout }) {
   const [filters, setFilters] = useState({ classId: '', q: '', status: 'active', page: 1 });
   const [query, setQuery] = useState('');
   const [data, setData] = useState(null);
@@ -699,16 +707,18 @@ function StudentsTab({ api, refData, notify, onLogout }) {
           <h1>Élèves</h1>
           <div className="muted">Inscriptions, transferts et fiches individuelles</div>
         </div>
-        <div className="toolbar">
-          <button className="btn btn-ghost" onClick={() => setModal({ type: 'import' })} disabled={!refData.classes.length}>
-            ⇪ Importer CSV
-          </button>
-          <button className="btn btn-primary" onClick={() => setModal({ type: 'create' })} disabled={!refData.classes.length}>
-            + Inscrire un élève
-          </button>
-        </div>
+        {perms.students && (
+          <div className="toolbar">
+            <button className="btn btn-ghost" onClick={() => setModal({ type: 'import' })} disabled={!refData.classes.length}>
+              ⇪ Importer CSV
+            </button>
+            <button className="btn btn-primary" onClick={() => setModal({ type: 'create' })} disabled={!refData.classes.length}>
+              + Inscrire un élève
+            </button>
+          </div>
+        )}
       </div>
-      {!refData.classes.length && <div className="alert alert-warn">Créez d’abord une classe dans l’onglet « Classes & personnel ».</div>}
+      {!refData.classes.length && perms.students && <div className="alert alert-warn">Créez d’abord une classe dans l’onglet « Classes & personnel ».</div>}
 
       <section className="card">
         <div className="card-head">
@@ -788,9 +798,11 @@ function StudentsTab({ api, refData, notify, onLogout }) {
                       <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'detail', student: s })}>
                         Fiche
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'edit', student: s })}>
-                        Modifier
-                      </button>
+                      {perms.students && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'edit', student: s })}>
+                          Modifier
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -827,7 +839,8 @@ function StudentsTab({ api, refData, notify, onLogout }) {
             close();
             load();
           }}
-          onEdit={(s) => setModal({ type: 'edit', student: s })}
+          onEdit={perms.students ? (s) => setModal({ type: 'edit', student: s }) : null}
+          canEditFees={perms.fees}
           notify={notify}
           onLogout={onLogout}
         />
@@ -919,23 +932,47 @@ function ClassForm({ api, cls, teachers, onClose, onSaved, notify, onLogout }) {
   );
 }
 
-function UserForm({ api, user, canCreateDirector, onClose, onSaved, notify, onLogout }) {
+function UserForm({ api, user, refData, session, onClose, onSaved, notify, onLogout }) {
   const editing = Boolean(user);
-  const [form, setForm] = useState({ fullName: user?.fullName ?? '', phone: user ? formatPhone(user.phone) : '', role: user?.role ?? 'TEACHER', password: '' });
+  const self = editing && user.id === session.user.id;
+  const roleOptions = refData.roles.filter((r) => refData.assignableRoles.includes(r.code) || r.code === user?.role);
+  const defaultOffice = (role) => refData.roles.find((r) => r.code === role)?.defaultOffice ?? 'SALLE_DES_PROFS';
+  const [form, setForm] = useState({
+    fullName: user?.fullName ?? '',
+    phone: user ? formatPhone(user.phone) : '',
+    role: user?.role ?? 'TEACHER',
+    office: user?.office ?? defaultOffice(user?.role ?? 'TEACHER'),
+    password: '',
+  });
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState('');
   const [busy, run] = useAsync(notify, onLogout);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  // Changer de rôle propose le bureau correspondant (modifiable ensuite).
+  const setRole = (e) => {
+    const role = e.target.value;
+    setForm((f) => ({ ...f, role, office: defaultOffice(role) }));
+  };
 
   async function submit(e) {
     e.preventDefault();
     const local = {};
+    if (!form.fullName.trim()) local.fullName = 'Nom obligatoire.';
     if (!editing && !normalizePhone(form.phone)) local.phone = 'Numéro RDC invalide.';
-    if ((!editing || form.password) && form.password.length < 8) local.password = '8 caractères minimum.';
+    if ((!editing || form.password) && !isStrongPassword(form.password)) local.password = PASSWORD_HINT;
     setErrors(local);
     if (Object.keys(local).length) return;
-    const res = await run(() => (editing ? api.updateUser(user.id, { fullName: form.fullName, ...(form.password ? { password: form.password } : {}) }) : api.createUser(form)), {
-      success: editing ? 'Compte mis à jour.' : `Compte créé : ${form.fullName} peut se connecter avec ${form.phone}.`,
+    const body = editing
+      ? {
+          fullName: form.fullName,
+          ...(form.role !== user.role ? { role: form.role } : {}),
+          ...(form.office !== user.office ? { office: form.office } : {}),
+          ...(form.password ? { password: form.password } : {}),
+        }
+      : { fullName: form.fullName, phone: form.phone, role: form.role, office: form.office, password: form.password };
+    const label = refData.roles.find((r) => r.code === form.role)?.label ?? form.role;
+    const res = await run(() => (editing ? api.updateUser(user.id, body) : api.createUser(body)), {
+      success: editing ? 'Compte mis à jour.' : `Compte « ${label} » créé : ${form.fullName} peut se connecter avec ${form.phone}.`,
       onError: (err) => {
         setErrors(fieldErrors(err));
         setMessage(err.message);
@@ -946,7 +983,7 @@ function UserForm({ api, user, canCreateDirector, onClose, onSaved, notify, onLo
 
   return (
     <Modal
-      title={editing ? `Modifier — ${user.fullName}` : 'Nouveau compte'}
+      title={editing ? `Modifier — ${user.fullName}` : 'Nouveau compte du personnel'}
       onClose={onClose}
       footer={
         <>
@@ -964,15 +1001,27 @@ function UserForm({ api, user, canCreateDirector, onClose, onSaved, notify, onLo
         <Field id="u-name" label="Nom complet" error={errors.fullName}>
           <input id="u-name" value={form.fullName} onChange={set('fullName')} autoFocus />
         </Field>
+        <Field id="u-phone" label="Téléphone (identifiant de connexion)" error={errors.phone}>
+          <input id="u-phone" value={form.phone} onChange={set('phone')} disabled={editing} inputMode="tel" placeholder="0970000000" />
+        </Field>
         <div className="form-grid">
-          <Field id="u-phone" label="Téléphone (identifiant)" error={errors.phone}>
-            <input id="u-phone" value={form.phone} onChange={set('phone')} disabled={editing} inputMode="tel" placeholder="0970000000" />
+          <Field id="u-role" label="Rôle" error={errors.role} hint={self ? 'Vous ne pouvez pas modifier votre propre rôle.' : undefined}>
+            <select id="u-role" value={form.role} onChange={setRole} disabled={self}>
+              {roleOptions.map((r) => (
+                <option key={r.code} value={r.code}>
+                  {r.label}
+                  {r.code === 'TEACHER' ? ' (application mobile)' : ''}
+                </option>
+              ))}
+            </select>
           </Field>
-          <Field id="u-role" label="Rôle" error={errors.role}>
-            <select id="u-role" value={form.role} onChange={set('role')} disabled={editing}>
-              <option value="TEACHER">Enseignant (application mobile)</option>
-              <option value="BURSAR">Économat</option>
-              {canCreateDirector && <option value="DIRECTOR">Direction</option>}
+          <Field id="u-office" label="Bureau" error={errors.office}>
+            <select id="u-office" value={form.office} onChange={set('office')}>
+              {refData.offices.map((o) => (
+                <option key={o.code} value={o.code}>
+                  {o.name}
+                </option>
+              ))}
             </select>
           </Field>
         </div>
@@ -980,16 +1029,16 @@ function UserForm({ api, user, canCreateDirector, onClose, onSaved, notify, onLo
           id="u-pass"
           label={editing ? 'Nouveau mot de passe' : 'Mot de passe initial'}
           error={errors.password}
-          hint={editing ? 'Laisser vide pour ne pas changer.' : 'À communiquer en main propre ; 8 caractères minimum.'}
+          hint={`${editing ? 'Laisser vide pour ne pas changer. ' : 'À communiquer en main propre. '}${PASSWORD_HINT} Stocké chiffré (bcrypt).`}
         >
-          <input id="u-pass" type="text" value={form.password} onChange={set('password')} autoComplete="new-password" />
+          <PasswordInput id="u-pass" value={form.password} onChange={set('password')} autoComplete="new-password" />
         </Field>
       </form>
     </Modal>
   );
 }
 
-function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
+function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
   const [modal, setModal] = useState(null);
   const [subject, setSubject] = useState({ name: '', defaultMaxScore: '20' });
   const [busy, run] = useAsync(notify, onLogout);
@@ -1025,14 +1074,18 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
           <h1>Classes & personnel</h1>
           <div className="muted">Les enseignants retrouvent leurs classes dans l’application mobile après « Recharger ».</div>
         </div>
-        {isDirection && (
+        {(perms.staff || perms.academic) && (
           <div className="toolbar">
-            <button className="btn btn-ghost" onClick={() => setModal({ type: 'user' })}>
-              + Nouveau compte
-            </button>
-            <button className="btn btn-primary" onClick={() => setModal({ type: 'class' })}>
-              + Nouvelle classe
-            </button>
+            {perms.staff && (
+              <button className="btn btn-ghost" onClick={() => setModal({ type: 'user' })}>
+                + Nouveau compte
+              </button>
+            )}
+            {perms.academic && (
+              <button className="btn btn-primary" onClick={() => setModal({ type: 'class' })}>
+                + Nouvelle classe
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1070,7 +1123,7 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
                     {c.studentCount}
                   </td>
                   <td data-label="" className="full">
-                    {isDirection && (
+                    {perms.academic && (
                       <div className="actions">
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'class', cls: c })}>
                           Modifier
@@ -1090,6 +1143,33 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
         )}
       </section>
 
+      <section className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head">
+          <h2>Bureaux</h2>
+          <span className="count">{refData.offices.length}</span>
+        </div>
+        <div className="offices">
+          {refData.offices.map((o) => (
+            <article className="office" key={o.code}>
+              <div className="office-head">
+                <b>{o.name}</b>
+                <span className="badge badge-wait">{o.members} membre(s)</span>
+              </div>
+              <small>{o.description}</small>
+              <div className="office-people">
+                {refData.staff
+                  .filter((u) => u.office === o.code && u.isActive)
+                  .map((u) => (
+                    <span className="chip" key={u.id}>
+                      {u.fullName} <small className="muted">{u.roleLabel ?? ROLE_LABELS[u.role]}</small>
+                    </span>
+                  ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
@@ -1101,6 +1181,7 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
               <tr>
                 <th>Nom</th>
                 <th>Rôle</th>
+                <th>Bureau</th>
                 <th>Téléphone</th>
                 <th />
               </tr>
@@ -1116,10 +1197,11 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
                       <small>{u.role === 'TEACHER' ? `${u.classCount} classe(s)` : ''}</small>
                     </div>
                   </td>
-                  <td data-label="Rôle">{ROLE_LABELS[u.role]}</td>
+                  <td data-label="Rôle">{u.roleLabel ?? ROLE_LABELS[u.role]}</td>
+                  <td data-label="Bureau">{u.officeName ?? <span className="muted">—</span>}</td>
                   <td data-label="Téléphone">{formatPhone(u.phone)}</td>
                   <td data-label="" className="full">
-                    {isDirection && u.role !== 'ADMIN' && (
+                    {perms.staff && (u.role !== 'ADMIN' || session.user.role === 'ADMIN') && (
                       <div className="actions">
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'user', user: u })}>
                           Modifier
@@ -1150,7 +1232,7 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
               </span>
             ))}
           </div>
-          {isDirection && (
+          {perms.academic && (
             <form className="inline-form" onSubmit={addSubject}>
               <input
                 aria-label="Nouvelle matière"
@@ -1180,7 +1262,8 @@ function ClassesTab({ api, refData, isDirection, session, notify, onLogout }) {
         <UserForm
           api={api}
           user={modal.user}
-          canCreateDirector={['ADMIN', 'DIRECTOR'].includes(session.user.role)}
+          refData={refData}
+          session={session}
           onClose={close}
           onSaved={saved}
           notify={notify}
@@ -1287,7 +1370,7 @@ function BulkFeeForm({ api, classes, onClose, onSaved, notify, onLogout }) {
   );
 }
 
-function FeesTab({ api, refData, notify, onLogout }) {
+function FeesTab({ api, refData, perms, notify, onLogout }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
@@ -1320,9 +1403,11 @@ function FeesTab({ api, refData, notify, onLogout }) {
           <h1>Frais scolaires</h1>
           <div className="muted">Année {data?.schoolYear ?? '…'} · élèves inscrits uniquement · remises et reports depuis la fiche de l’élève</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setOpen(true)} disabled={!refData.classes.length}>
-          + Nouveau frais
-        </button>
+        {perms.fees && (
+          <button className="btn btn-primary" onClick={() => setOpen(true)} disabled={!refData.classes.length}>
+            + Nouveau frais
+          </button>
+        )}
       </div>
 
       <div className="kpis" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
@@ -1444,13 +1529,17 @@ export const ADMIN_TABS = [
 ];
 
 export function AdminView({ tab, session, notify, onLogout, onSlow }) {
-  const api = useMemo(() => (session.mode === 'demo' ? null : createAdminApi(session.token, onSlow)), [session, onSlow]);
+  const api = useMemo(() => createAdminApi(session.token, onSlow), [session.token, onSlow]);
   const [overview, setOverview] = useState(null);
   const [error, setError] = useState('');
-  const isDirection = ['ADMIN', 'DIRECTOR'].includes(session.user.role);
+  const perms = {
+    staff: can(session.user, 'MANAGE_STAFF'),
+    academic: can(session.user, 'MANAGE_ACADEMIC'),
+    students: can(session.user, 'MANAGE_STUDENTS'),
+    fees: can(session.user, 'MANAGE_FEES'),
+  };
 
   const reload = useCallback(() => {
-    if (!api) return;
     api
       .overview()
       .then((d) => {
@@ -1461,22 +1550,11 @@ export function AdminView({ tab, session, notify, onLogout, onSlow }) {
   }, [api, onLogout]);
   useEffect(reload, [reload]);
 
-  if (!api) {
-    return (
-      <div className="card">
-        <div className="empty">
-          <strong>Gestion administrative disponible uniquement connecté à l’API</strong>
-          Le mode démonstration fonctionne hors-ligne avec des données fictives. Connectez-vous avec un compte Direction ou Économat pour inscrire des élèves, gérer les classes et
-          les frais.
-        </div>
-      </div>
-    );
-  }
   if (error && !overview) return <div className="alert alert-error">{error}</div>;
   if (!overview) return <div className="skeleton" style={{ height: 320 }} />;
 
   const refData = { ...overview, reload };
-  const props = { api, refData, notify, onLogout, session, isDirection };
+  const props = { api, refData, notify, onLogout, session, perms };
   if (tab === 'students') return <StudentsTab {...props} />;
   if (tab === 'classes') return <ClassesTab {...props} />;
   return <FeesTab {...props} />;

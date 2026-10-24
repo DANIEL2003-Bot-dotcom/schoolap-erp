@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { PERMISSIONS } from '../services/roles.js';
 import { forbidden, unauthorized } from '../utils/httpError.js';
 
 export function signToken(user, config) {
@@ -24,7 +25,7 @@ export function requireAuth({ prisma, config }) {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, schoolId: true, fullName: true, phone: true, role: true, isActive: true },
+      select: { id: true, schoolId: true, fullName: true, phone: true, role: true, isActive: true, officeId: true },
     });
     if (!user || !user.isActive) return next(unauthorized('Compte introuvable ou désactivé.'));
     req.user = user;
@@ -37,4 +38,11 @@ export function requireRole(...roles) {
     if (!req.user || !roles.includes(req.user.role)) return next(forbidden('Votre rôle ne permet pas cette action.'));
     return next();
   };
+}
+
+/** Autorise l'accès selon une capacité de la structure EPST (voir services/roles.js). */
+export function requirePermission(permission) {
+  const allowed = PERMISSIONS[permission];
+  if (!allowed) throw new Error(`Permission inconnue : ${permission}`);
+  return requireRole(...allowed);
 }

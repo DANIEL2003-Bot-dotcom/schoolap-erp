@@ -80,7 +80,7 @@ export function createApp({ prisma, config, overrides = {} }) {
   app.use('/api/teacher', teacherRouter({ prisma, config }));
   app.use('/api/attendance', sync.attendance);
   app.use('/api/grades', sync.grades);
-  app.use('/api/payments', paymentsRouter({ config, mobileMoneyService }));
+  app.use('/api/payments', paymentsRouter({ prisma, config, mobileMoneyService }));
   app.use('/api/dashboard', admin.dashboard);
   app.use('/api/fees', admin.fees);
   app.use('/api/admin', adminRouter({ prisma, config, adminService }));

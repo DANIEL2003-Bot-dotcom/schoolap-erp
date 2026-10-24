@@ -198,10 +198,14 @@ describe('Application mobile — bootstrap et synchronisation', () => {
 });
 
 describe('Paiements Mobile Money', () => {
+  const cashierToken = () => login(SEED_USERS.director.phone, PASSWORDS.director);
+
   async function initiate(fee, overrides = {}) {
     const remaining = Number(fee.amountDue) - Number(fee.amountPaid);
+    const token = await cashierToken();
     return request(ctx.app)
       .post('/api/payments/mobile-money')
+      .set(auth(token))
       .send({
         studentId: fee.studentId,
         schoolFeeId: fee.id,
@@ -252,7 +256,7 @@ describe('Paiements Mobile Money', () => {
     const again = await prisma.schoolFee.findUniqueOrThrow({ where: { id: fee.id } });
     assert.equal(Number(again.amountPaid), Number(updated.amountPaid));
 
-    const status = await request(ctx.app).get(`/api/payments/mobile-money/${init.body.transactionId}`);
+    const status = await request(ctx.app).get(`/api/payments/mobile-money/${init.body.transactionId}`).set(auth(await cashierToken()));
     assert.equal(status.body.status, 'SUCCESS');
   });
 
@@ -373,9 +377,10 @@ describe('Paiements Mobile Money', () => {
       const init = await initiate(fee);
       assert.equal(init.status, 202);
       let status = 'PENDING';
+      const headers = { Authorization: `Bearer ${await cashierToken()}` };
       for (let i = 0; i < 40 && status === 'PENDING'; i += 1) {
         await new Promise((r) => setTimeout(r, 50));
-        const res = await fetch(`http://127.0.0.1:${port}/api/payments/mobile-money/${init.body.transactionId}`);
+        const res = await fetch(`http://127.0.0.1:${port}/api/payments/mobile-money/${init.body.transactionId}`, { headers });
         status = (await res.json()).status;
       }
       assert.equal(status, 'SUCCESS');
