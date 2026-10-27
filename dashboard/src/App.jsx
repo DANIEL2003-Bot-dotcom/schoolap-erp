@@ -15,14 +15,13 @@ import {
   formatPhone,
   normalizePhone,
   detectOperator,
-  initials,
   apiFetch,
   can,
-  ROLE_LABELS,
   tokenExpiry,
   isTokenUsable,
 } from './lib.js';
 import { PASSWORD_CSS, PasswordInput } from './ui.jsx';
+import { BottomNav, InstallCard, IosInstallSheet, MOBILE_CSS, UserMenu, isIOS, isStandalone, useInstallPrompt, useIsMobile, useOnline } from './mobile.jsx';
 
 /* =============================================================================
    ERP SCOLAIRE RDC — Tableau de bord du Directeur
@@ -34,6 +33,42 @@ import { PASSWORD_CSS, PasswordInput } from './ui.jsx';
    ============================================================================= */
 
 const SESSION_KEY = 'erp.directeur.session';
+const CACHE_PREFIX = 'erp.directeur.cache.';
+const CACHE_MAX_DAYS = 7;
+const MOBILE_LIST_LIMIT = 8;
+const NAV_TABS = [{ id: 'dashboard', label: 'Tableau de bord', short: 'Accueil', icon: 'dashboard' }, ...ADMIN_TABS];
+
+/** Derniers chiffres consultés, gardés sur l'appareil pour une lecture sans réseau (effacés à la déconnexion). */
+function readSummaryCache(userId) {
+  try {
+    return JSON.parse(localStorage.getItem(CACHE_PREFIX + userId)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSummaryCache(userId, date, data) {
+  try {
+    const all = readSummaryCache(userId);
+    all[date] = { data, savedAt: new Date().toISOString() };
+    const keep = Object.keys(all)
+      .sort((a, b) => all[b].savedAt.localeCompare(all[a].savedAt))
+      .slice(0, CACHE_MAX_DAYS);
+    localStorage.setItem(CACHE_PREFIX + userId, JSON.stringify(Object.fromEntries(keep.map((k) => [k, all[k]]))));
+  } catch {
+    /* stockage plein ou indisponible : la lecture hors ligne sera simplement impossible */
+  }
+}
+
+function clearSummaryCaches() {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(CACHE_PREFIX))
+      .forEach((k) => localStorage.removeItem(k));
+  } catch {
+    /* rien à effacer */
+  }
+}
 const REFRESH_MS = 60_000;
 const REMINDER_COOLDOWN_MS = 24 * 3_600_000;
 
@@ -66,7 +101,9 @@ button:disabled{cursor:not-allowed;opacity:.6}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
 /* --- Connexion --- */
-.login{min-height:100vh;display:grid;grid-template-columns:1.1fr 1fr}
+.login{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+.login>*{min-width:0}
+.btn-wrap{white-space:normal;height:auto;min-height:44px;padding:10px 14px;line-height:1.3;text-align:center}
 .login-hero{background:linear-gradient(150deg,var(--navy-900),var(--navy-700));color:#fff;padding:56px;display:flex;flex-direction:column;justify-content:space-between}
 .login-hero h1{font-size:34px;line-height:1.15;margin:24px 0 12px;font-weight:700}
 .login-hero p{color:#C9D6EA;max-width:440px;line-height:1.6}
@@ -203,7 +240,7 @@ footer{max-width:1280px;margin:0 auto;padding:8px 24px 32px;color:var(--grey-500
 
 /* --- Responsive --- */
 @media (max-width:1080px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-2{grid-template-columns:1fr}}
-@media (max-width:860px){.login{grid-template-columns:1fr}.login-hero{padding:32px 24px}.login-hero h1{font-size:26px}.hero-list{display:none}}
+@media (max-width:860px){.login{grid-template-columns:minmax(0,1fr)}.login-hero{padding:32px 24px}.login-hero h1{font-size:26px}.hero-list{display:none}}
 @media (max-width:720px){
   .topbar-inner{flex-wrap:wrap;padding:10px 16px}
   .topbar-actions{width:100%;margin-left:0}
@@ -228,7 +265,6 @@ footer{max-width:1280px;margin:0 auto;padding:8px 24px 32px;color:var(--grey-500
   .actions{justify-content:stretch}
   .actions .btn{flex:1}
 }
-@media (max-width:420px){.kpis{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 `;
 
@@ -328,8 +364,8 @@ function LoginScreen({ onLogin }) {
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
             {busy ? 'Connexion…' : 'Se connecter'}
           </button>
-          <a className="btn btn-ghost btn-block" href={`${import.meta.env.BASE_URL}enseignant/`} style={{ marginTop: 12, textDecoration: 'none' }}>
-            Vous êtes enseignant ? Espace Enseignant (iPhone, Android, ordinateur)
+          <a className="btn btn-ghost btn-block btn-wrap" href={`${import.meta.env.BASE_URL}enseignant/`} style={{ marginTop: 12, textDecoration: 'none' }}>
+            Vous êtes enseignant ? Ouvrir l’Espace Enseignant
           </a>
           <p className="hint" style={{ marginTop: 14 }}>
             API : {API_URL || 'même origine (proxy de développement)'}
@@ -559,7 +595,46 @@ function Dashboard({ session, onLogout }) {
   const [payFee, setPayFee] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [tab, setTab] = useState('dashboard');
+  const [staleAt, setStaleAt] = useState(null);
+  const [showAllAbs, setShowAllAbs] = useState(false);
+  const [showAllIns, setShowAllIns] = useState(false);
+  const [iosHelp, setIosHelp] = useState(false);
+  const mobile = useIsMobile();
+  const online = useOnline();
+  const [deferredInstall, clearDeferredInstall] = useInstallPrompt();
+  const canInstall = !isStandalone() && (Boolean(deferredInstall) || isIOS());
   const today = todayIso();
+  const userId = session.user.id;
+
+  async function install() {
+    if (deferredInstall) {
+      deferredInstall.prompt();
+      await deferredInstall.userChoice.catch(() => null);
+      clearDeferredInstall();
+    } else {
+      setIosHelp(true);
+    }
+  }
+
+  // Onglets inscrits dans l'historique : le bouton « Retour » du téléphone revient à l'onglet précédent.
+  const goTab = useCallback(
+    (id) => {
+      if (id === tab) return;
+      window.history.pushState({ erpTab: id }, '');
+      setTab(id);
+      window.scrollTo(0, 0);
+    },
+    [tab],
+  );
+  useEffect(() => {
+    window.history.replaceState({ erpTab: 'dashboard' }, '');
+    const onPop = (e) => {
+      setTab(e.state?.erpTab ?? 'dashboard');
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const notify = useCallback((t) => {
     const id = Math.random().toString(36).slice(2);
@@ -573,23 +648,37 @@ function Dashboard({ session, onLogout }) {
       try {
         const res = await api.summary(date);
         setData(res);
+        setStaleAt(null);
         setError('');
+        writeSummaryCache(userId, date, res);
       } catch (err) {
         if (err.status === 401) {
           onLogout('Votre session a expiré. Reconnectez-vous.');
           return;
         }
-        setError(err.message);
+        const cached = err.status === 0 ? readSummaryCache(userId)[date] : null;
+        if (cached) {
+          setData(cached.data);
+          setStaleAt(cached.savedAt);
+          setError('');
+        } else {
+          setError(err.message);
+        }
       } finally {
         if (!silent) setLoading(false);
       }
     },
-    [api, date, onLogout],
+    [api, date, onLogout, userId],
   );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Retour du réseau : les chiffres enregistrés sont aussitôt remplacés par les chiffres du jour.
+  useEffect(() => {
+    if (online && staleAt) load(true);
+  }, [online, staleAt, load]);
 
   useEffect(() => {
     if (date !== today || tab !== 'dashboard') return undefined;
@@ -628,6 +717,8 @@ function Dashboard({ session, onLogout }) {
   const usd = data?.finance?.find((f) => f.currency === 'USD');
   const cdf = data?.finance?.find((f) => f.currency === 'CDF');
   const outstandingTotal = (data?.insolvents ?? []).reduce((s, f) => s + (f.currency === 'USD' ? f.remaining : 0), 0);
+  const shownAbsents = mobile && !showAllAbs ? absents.slice(0, MOBILE_LIST_LIMIT) : absents;
+  const shownInsolvents = mobile && !showAllIns ? insolvents.slice(0, MOBILE_LIST_LIMIT) : insolvents;
 
   return (
     <>
@@ -645,40 +736,16 @@ function Dashboard({ session, onLogout }) {
             </div>
           </div>
           <div className="topbar-actions">
-            {tab === 'dashboard' && (
-              <>
-                <label className="sr-only" htmlFor="day">
-                  Date
-                </label>
-                <input id="day" type="date" value={date} max={today} onChange={(e) => e.target.value && setDate(e.target.value)} />
-                <button className="btn-top" onClick={() => load()} disabled={loading} aria-label="Actualiser">
-                  ↻<span className="btn-refresh-label"> Actualiser</span>
-                </button>
-              </>
-            )}
-            <div className="user-chip">
-              <span className="avatar" aria-hidden="true">
-                {initials(session.user.fullName)}
-              </span>
-              <span className="user-name" style={{ fontSize: 13 }}>
-                {session.user.fullName}
-                <span className="role-tag">
-                  {session.user.roleLabel ?? ROLE_LABELS[session.user.role]}
-                  {session.user.office ? ` · ${session.user.office.name}` : ''}
-                </span>
-              </span>
-              <button className="btn-top" onClick={() => onLogout()}>
-                Quitter
-              </button>
-            </div>
+            <UserMenu user={session.user} onLogout={() => onLogout()} canInstall={canInstall} onInstall={install} />
           </div>
         </div>
+        {!online && <div className="offline-bar">Pas de connexion Internet — affichage des dernières données enregistrées sur cet appareil.</div>}
       </header>
 
       <nav className="tabs" aria-label="Sections">
         <div className="tabs-inner" role="tablist">
-          {[{ id: 'dashboard', label: 'Tableau de bord' }, ...ADMIN_TABS].map((t) => (
-            <button key={t.id} role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
+          {NAV_TABS.map((t) => (
+            <button key={t.id} role="tab" className="tab" aria-selected={tab === t.id} onClick={() => goTab(t.id)}>
               {t.label}
             </button>
           ))}
@@ -691,16 +758,39 @@ function Dashboard({ session, onLogout }) {
         </main>
       ) : (
         <main className="page">
+          {mobile && <InstallCard deferred={deferredInstall} onInstall={install} onIosHelp={() => setIosHelp(true)} />}
           <div className="page-head">
             <div>
-              <h1>Tableau de bord du Directeur</h1>
+              <h1>{mobile ? 'Tableau de bord' : 'Tableau de bord du Directeur'}</h1>
               <div className="muted">
                 {formatLongDate(date)}
                 {data ? ` · mis à jour à ${formatTime(data.generatedAt)}` : ''}
               </div>
             </div>
-            {att?.classesPending?.length > 0 && <span className="badge badge-amber">Appel non fait : {att.classesPending.join(', ')}</span>}
+            <div className="day-tools">
+              <label className="sr-only" htmlFor="day">
+                Date
+              </label>
+              <input id="day" type="date" value={date} max={today} onChange={(e) => e.target.value && setDate(e.target.value)} />
+              <button className="btn btn-ghost" onClick={() => load()} disabled={loading} aria-label="Actualiser">
+                ↻<span className="btn-refresh-label"> Actualiser</span>
+              </button>
+            </div>
           </div>
+
+          {staleAt && (
+            <div className="alert alert-warn" role="status">
+              Hors ligne : chiffres enregistrés le {formatDateTime(staleAt)}. Ils seront actualisés dès le retour du réseau.
+            </div>
+          )}
+          {att?.classesPending?.length > 0 && (
+            <div className="alert alert-warn pending-alert" role="status">
+              <span aria-hidden="true">⚠</span>
+              <span>
+                <b>Appel non fait ({att.classesPending.length}) :</b> {att.classesPending.join(', ')}
+              </span>
+            </div>
+          )}
 
           {slow && loading && <div className="alert alert-warn">Le serveur gratuit se réveille… les données arrivent dans quelques secondes.</div>}
           {error && (
@@ -762,7 +852,7 @@ function Dashboard({ session, onLogout }) {
                 </div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
-                  <table className="responsive">
+                  <table className="responsive compact">
                     <thead>
                       <tr>
                         <th>Élève</th>
@@ -772,22 +862,31 @@ function Dashboard({ session, onLogout }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {absents.map((a) => (
+                      {shownAbsents.map((a) => (
                         <tr key={a.attendanceId}>
-                          <td className="full" data-label="Élève">
+                          <td className="full c-main" data-label="Élève">
                             <div className="student">
                               <b>{a.studentName}</b>
                               <small>{a.matricule}</small>
                             </div>
                           </td>
-                          <td data-label="Classe">{a.className}</td>
-                          <td data-label="Tuteur" style={{ whiteSpace: 'nowrap' }}>
+                          <td data-label="Classe" className="c-sub">
+                            {a.className}
+                            <span className="show-sm">
+                              {' · '}
+                              <a className="tel-link" href={`tel:${a.guardianPhone}`}>
+                                {formatPhone(a.guardianPhone)}
+                              </a>
+                            </span>
+                          </td>
+                          <td data-label="Tuteur" className="hide-sm" style={{ whiteSpace: 'nowrap' }}>
                             {formatPhone(a.guardianPhone)}
                           </td>
-                          <td data-label="Notification">
+                          <td data-label="Notification" className="c-end">
                             {a.smsSent ? (
                               <span className="badge badge-sms" title={`Envoyé le ${formatDateTime(a.smsSentAt)}`}>
-                                ✓ SMS envoyé · {formatTime(a.smsSentAt)}
+                                ✓ SMS {mobile ? '' : 'envoyé · '}
+                                {formatTime(a.smsSentAt)}
                               </span>
                             ) : (
                               <span className="badge badge-wait">En attente</span>
@@ -797,6 +896,13 @@ function Dashboard({ session, onLogout }) {
                       ))}
                     </tbody>
                   </table>
+                  {shownAbsents.length < absents.length && (
+                    <div className="more-row">
+                      <button className="btn btn-ghost btn-block" onClick={() => setShowAllAbs(true)}>
+                        Afficher les {absents.length - shownAbsents.length} autres absents
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -867,7 +973,7 @@ function Dashboard({ session, onLogout }) {
               </div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
-                <table className="responsive">
+                <table className="responsive compact">
                   <thead>
                     <tr>
                       <th>Élève</th>
@@ -881,14 +987,14 @@ function Dashboard({ session, onLogout }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {insolvents.map((f) => {
+                    {shownInsolvents.map((f) => {
                       const r = reminders[f.feeId];
                       const lastAt = r?.at ?? f.lastReminderAt;
                       const inCooldown = lastAt && Date.now() - Date.parse(lastAt) < REMINDER_COOLDOWN_MS;
                       const late = daysBetween(f.dueDate, today);
                       return (
                         <tr key={f.feeId}>
-                          <td className="full" data-label="Élève">
+                          <td className="full c-main" data-label="Élève">
                             <div className="student">
                               <b>{f.studentName}</b>
                               <small>
@@ -896,19 +1002,30 @@ function Dashboard({ session, onLogout }) {
                               </small>
                             </div>
                           </td>
-                          <td data-label="Classe">{f.className}</td>
-                          <td data-label="Frais">{f.label}</td>
-                          <td className="num" data-label="Payé / Dû">
+                          <td data-label="Classe" className="c-sub">
+                            {f.className}
+                            <span className="show-sm">
+                              {' · '}
+                              {f.label} · <span className="badge badge-red">J+{late}</span>
+                              {lastAt && <span className="reminded"> · relancé ✓</span>}
+                            </span>
+                          </td>
+                          <td data-label="Frais" className="hide-sm">
+                            {f.label}
+                          </td>
+                          <td className="num hide-sm" data-label="Payé / Dû">
                             {formatMoney(f.amountPaid, f.currency)} / {formatMoney(f.amountDue, f.currency)}
                           </td>
-                          <td className="num remaining" data-label="Reste">
+                          <td className="num remaining c-end" data-label="Reste">
                             {formatMoney(f.remaining, f.currency)}
                           </td>
-                          <td data-label="Échéance">
+                          <td data-label="Échéance" className="hide-sm">
                             {formatShortDate(f.dueDate)} <span className="badge badge-red">J+{late}</span>
                           </td>
-                          <td data-label="Dernière relance">{lastAt ? <span className="reminded">✓ {formatDateTime(lastAt)}</span> : <span className="muted">Jamais</span>}</td>
-                          <td className="full" data-label="Actions">
+                          <td data-label="Dernière relance" className="hide-sm">
+                            {lastAt ? <span className="reminded">✓ {formatDateTime(lastAt)}</span> : <span className="muted">Jamais</span>}
+                          </td>
+                          <td className="full c-act" data-label="Actions">
                             {canCollect ? (
                             <div className="actions">
                               <button
@@ -917,7 +1034,11 @@ function Dashboard({ session, onLogout }) {
                                 disabled={r?.state === 'sending' || inCooldown}
                                 title={inCooldown ? 'Une seule relance par 24 h et par frais' : 'Envoyer un SMS de rappel au tuteur'}
                               >
-                                {r?.state === 'sending' ? <span className="spinner" /> : '✉'} {inCooldown ? 'Relancé' : 'Relancer par SMS'}
+                                {r?.state === 'sending' ? <span className="spinner" /> : '✉'} {inCooldown ? 'Relancé' : (
+                                  <>
+                                    Relancer<span className="lg-only"> par SMS</span>
+                                  </>
+                                )}
                               </button>
                               <button className="btn btn-sm btn-ghost" onClick={() => setPayFee(f)}>
                                 Encaisser
@@ -932,6 +1053,13 @@ function Dashboard({ session, onLogout }) {
                     })}
                   </tbody>
                 </table>
+                {shownInsolvents.length < insolvents.length && (
+                  <div className="more-row">
+                    <button className="btn btn-ghost btn-block" onClick={() => setShowAllIns(true)}>
+                      Afficher les {insolvents.length - shownInsolvents.length} autres élèves
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </section>
@@ -942,6 +1070,10 @@ function Dashboard({ session, onLogout }) {
         <span>ERP Scolaire RDC · Données en direct — {API_URL || 'API sur la même origine (proxy)'}</span>
         <span>{tab === 'dashboard' ? 'Actualisation automatique toutes les 60 s' : 'Gestion administrative'}</span>
       </footer>
+
+      <div className="bn-spacer" aria-hidden="true" />
+      <BottomNav tabs={NAV_TABS} current={tab} onSelect={goTab} />
+      {iosHelp && <IosInstallSheet onClose={() => setIosHelp(false)} />}
 
       {payFee && <PaymentModal fee={payFee} api={api} onClose={() => setPayFee(null)} onDone={() => load(true)} notify={notify} />}
 
@@ -961,11 +1093,12 @@ function Dashboard({ session, onLogout }) {
 
 function readSession() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY); // ancien emplacement (avant l'application installable)
+    const raw = localStorage.getItem(SESSION_KEY);
     const stored = raw ? JSON.parse(raw) : null;
     // Toute session sans jeton exploitable (absent, illisible ou expiré) est détruite d'office.
     if (!stored?.token || !isTokenUsable(stored.token)) {
-      sessionStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_KEY);
       return null;
     }
     return stored;
@@ -976,8 +1109,9 @@ function readSession() {
 
 function writeSession(s) {
   try {
-    if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    else sessionStorage.removeItem(SESSION_KEY);
+    // localStorage : l'application installée reste connectée (12 h au plus, durée du jeton) même après fermeture.
+    if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SESSION_KEY);
   } catch {
     /* stockage indisponible (navigation privée stricte) : session en mémoire uniquement */
   }
@@ -1021,6 +1155,7 @@ export default function App() {
 
   const logout = useCallback((message) => {
     writeSession(null);
+    clearSummaryCaches();
     setSession(null);
     setVerified(false);
     setCheckError('');
@@ -1056,6 +1191,8 @@ export default function App() {
       .catch((err) => {
         if (cancelled) return;
         if (err.status === 401 || err.status === 403) logout('Votre session n’est plus valide. Reconnectez-vous.');
+        // Sans réseau, un jeton encore valide ouvre l'application sur les dernières données enregistrées.
+        else if (err.status === 0 && isTokenUsable(session.token)) setVerified(true);
         else setCheckError(err.message);
       });
     return () => {
@@ -1113,7 +1250,7 @@ export default function App() {
 
   return (
     <>
-      <style>{CSS + PASSWORD_CSS + ADMIN_CSS}</style>
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + MOBILE_CSS}</style>
       {content}
     </>
   );

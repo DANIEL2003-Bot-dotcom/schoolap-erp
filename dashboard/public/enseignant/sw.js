@@ -39,7 +39,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      for (const key of await caches.keys()) if (key !== CACHE) await caches.delete(key);
+      for (const key of await caches.keys()) if (key.startsWith('schoolap-enseignant-') && key !== CACHE) await caches.delete(key);
       await self.clients.claim();
     })(),
   );

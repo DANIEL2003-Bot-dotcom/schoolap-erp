@@ -279,6 +279,14 @@ Le fichier se trouve dans `mobile\build\app\outputs\flutter-apk\app-release.apk`
 
 > Pour une publication sur le Play Store, il faut une clé de signature personnelle (voir https://docs.flutter.dev/deployment/android). Pour une diffusion directe dans l'école, l'APK ci-dessus suffit.
 
+### B3 bis. Tableau de bord sur le téléphone de la Direction
+
+Ouvrez le lien du tableau de bord sur le téléphone, puis :
+- **Android** : touchez **Installer** ;
+- **iPhone** : dans Safari, **Partager → « Sur l'écran d'accueil »**.
+
+L'icône **« Direction »** apparaît. Elle s'ouvre en plein écran, même sans réseau, avec les derniers chiffres consultés.
+
 ### B4 bis. Enseignants équipés d'un iPhone
 
 Envoyez-leur le lien **https://daniel2003-bot-dotcom.github.io/schoolap-erp/enseignant/**. Ils l'ouvrent dans Safari, touchent **Partager → « Sur l'écran d'accueil »**, puis se connectent avec leur compte Enseignant. L'appel et les cotes fonctionnent aussi sans réseau. Le lien sert également sur Android et sur ordinateur.

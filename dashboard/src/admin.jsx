@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, formatPhone, formatShortDate, isStrongPassword, normalizePhone, todayIso } from './lib.js';
 import { PasswordInput } from './ui.jsx';
+import { useIsMobile } from './mobile.jsx';
 
 /* =============================================================================
    Gestion administrative — structure EPST
@@ -66,6 +67,9 @@ export const ADMIN_CSS = `
 .err-list{margin:0;padding:0;list-style:none;max-height:220px;overflow:auto;font-size:13px}
 .err-list li{padding:6px 0;border-bottom:1px solid var(--grey-100)}
 .err-list b{color:var(--red-600);margin-right:6px}
+.kpis.fees-kpis{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.show-sm{display:none}
+.tel-link{color:inherit;text-decoration:none;white-space:nowrap}
 .chip{display:inline-flex;align-items:center;gap:6px;background:var(--grey-100);border-radius:999px;padding:4px 10px;font-size:13px;margin:0 6px 6px 0}
 .inline-form{display:flex;gap:8px;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--grey-200)}
 .inline-form input{height:36px;border:1px solid var(--grey-300);border-radius:8px;padding:0 10px;min-width:0}
@@ -81,6 +85,10 @@ export const ADMIN_CSS = `
   .toolbar{width:100%}
   .toolbar>*{flex:1 1 140px}
   .stat-row{grid-template-columns:1fr 1fr 1fr}
+  .show-sm{display:inline}
+  table.compact tbody td.c-act{grid-column:1 / -1;grid-row:3;margin-top:8px}
+  table.compact tbody td.c-act:empty{display:none}
+  .tel-link{color:var(--navy-700);font-weight:600}
 }
 `;
 
@@ -636,6 +644,7 @@ function ImportModal({ api, classes, defaultClassId, onClose, onDone, notify, on
           <div className="alert alert-info" style={{ background: 'var(--green-50)', color: 'var(--green-600)', borderColor: '#BFE5CB' }}>
             Fichier valide : {check.valid} élève(s) prêt(s) à être importé(s). Aperçu :
           </div>
+          <div style={{ overflowX: 'auto' }}>
           <table>
             <thead>
               <tr>
@@ -658,6 +667,7 @@ function ImportModal({ api, classes, defaultClassId, onClose, onDone, notify, on
               ))}
             </tbody>
           </table>
+          </div>
         </>
       )}
     </Modal>
@@ -674,6 +684,7 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null); // {type:'create'|'edit'|'detail'|'import', student?}
+  const mobile = useIsMobile();
   const pageSize = 25;
 
   useEffect(() => {
@@ -713,7 +724,7 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
               ⇪ Importer CSV
             </button>
             <button className="btn btn-primary" onClick={() => setModal({ type: 'create' })} disabled={!refData.classes.length}>
-              + Inscrire un élève
+              + Inscrire<span className="lg-only"> un élève</span>
             </button>
           </div>
         )}
@@ -726,7 +737,7 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
           {data && <span className="count">{data.total}</span>}
           <div className="card-tools toolbar">
             <select aria-label="Classe" value={filters.classId} onChange={(e) => setFilters((f) => ({ ...f, classId: e.target.value, page: 1 }))}>
-              <option value="">Toutes les classes</option>
+              <option value="">Toutes classes</option>
               {refData.classes.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -757,7 +768,7 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
           </div>
         )}
         {data && data.students.length > 0 && (
-          <table className="responsive">
+          <table className="responsive compact">
             <thead>
               <tr>
                 <th>Élève</th>
@@ -769,8 +780,12 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
             </thead>
             <tbody>
               {data.students.map((s) => (
-                <tr key={s.id} className={s.isActive ? '' : 'inactive'}>
-                  <td data-label="Élève" className="full">
+                <tr
+                  key={s.id}
+                  className={`${s.isActive ? '' : 'inactive'} ${mobile ? 'tap' : ''}`}
+                  onClick={mobile ? () => setModal({ type: 'detail', student: s }) : undefined}
+                >
+                  <td data-label="Élève" className="full c-main">
                     <div className="student">
                       <b>
                         <button className="link" onClick={() => setModal({ type: 'detail', student: s })}>
@@ -783,17 +798,19 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
                       </small>
                     </div>
                   </td>
-                  <td data-label="Classe">{s.className}</td>
-                  <td data-label="Tuteur">
+                  <td data-label="Classe" className="c-sub">
+                    {s.className}
+                  </td>
+                  <td data-label="Tuteur" className="hide-sm">
                     <div className="student">
                       <span>{formatPhone(s.guardianPhone)}</span>
                       <small>{s.guardianName ?? ''}</small>
                     </div>
                   </td>
-                  <td data-label="Reste à payer" className="num">
+                  <td data-label="Reste à payer" className="num c-end">
                     {s.outstanding > 0 ? <span className="remaining">{formatMoney(s.outstanding)}</span> : <span className="badge badge-sms">Soldé</span>}
                   </td>
-                  <td data-label="" className="full">
+                  <td data-label="" className="full hide-sm">
                     <div className="actions">
                       <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'detail', student: s })}>
                         Fiche
@@ -1084,12 +1101,12 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
           <div className="toolbar">
             {perms.staff && (
               <button className="btn btn-ghost" onClick={() => setModal({ type: 'user' })}>
-                + Nouveau compte
+                + <span className="lg-only">Nouveau </span><span className="sm-only">Compte</span><span className="lg-only">compte</span>
               </button>
             )}
             {perms.academic && (
               <button className="btn btn-primary" onClick={() => setModal({ type: 'class' })}>
-                + Nouvelle classe
+                + <span className="lg-only">Nouvelle </span><span className="sm-only">Classe</span><span className="lg-only">classe</span>
               </button>
             )}
           </div>
@@ -1106,7 +1123,7 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
             <strong>Aucune classe</strong>Créez la première classe de l’année.
           </div>
         ) : (
-          <table className="responsive">
+          <table className="responsive compact">
             <thead>
               <tr>
                 <th>Classe</th>
@@ -1118,17 +1135,27 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
             <tbody>
               {refData.classes.map((c) => (
                 <tr key={c.id}>
-                  <td data-label="Classe" className="full">
+                  <td data-label="Classe" className="full c-main">
                     <div className="student">
                       <b>{c.name}</b>
                       <small>{[c.level, c.option, c.section].filter(Boolean).join(' · ')}</small>
                     </div>
                   </td>
-                  <td data-label="Titulaire">{c.teacherName ?? <span className="badge badge-amber">Sans titulaire</span>}</td>
-                  <td data-label="Élèves" className="num">
-                    {c.studentCount}
+                  <td data-label="Titulaire" className="c-sub">
+                    {c.teacherName ? (
+                      <>
+                        <span className="show-sm">Titulaire : </span>
+                        {c.teacherName}
+                      </>
+                    ) : (
+                      <span className="badge badge-amber">Sans titulaire</span>
+                    )}
                   </td>
-                  <td data-label="" className="full">
+                  <td data-label="Élèves" className="num c-end">
+                    <b>{c.studentCount}</b>
+                    <span className="show-sm muted"> élèves</span>
+                  </td>
+                  <td data-label="" className="full c-act">
                     {perms.academic && (
                       <div className="actions">
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'class', cls: c })}>
@@ -1182,7 +1209,7 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
             <h2>Personnel</h2>
             <span className="count">{refData.staff.filter((u) => u.isActive).length}</span>
           </div>
-          <table className="responsive">
+          <table className="responsive compact">
             <thead>
               <tr>
                 <th>Nom</th>
@@ -1195,7 +1222,7 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
             <tbody>
               {refData.staff.map((u) => (
                 <tr key={u.id} className={u.isActive ? '' : 'inactive'}>
-                  <td data-label="Nom" className="full">
+                  <td data-label="Nom" className="full c-main">
                     <div className="student">
                       <b>
                         {u.fullName} {!u.isActive && <span className="badge badge-wait">Désactivé</span>}
@@ -1203,10 +1230,19 @@ function ClassesTab({ api, refData, perms, session, notify, onLogout }) {
                       <small>{u.role === 'TEACHER' ? `${u.classCount} classe(s)` : ''}</small>
                     </div>
                   </td>
-                  <td data-label="Rôle">{u.roleLabel ?? ROLE_LABELS[u.role]}</td>
-                  <td data-label="Bureau">{u.officeName ?? <span className="muted">—</span>}</td>
-                  <td data-label="Téléphone">{formatPhone(u.phone)}</td>
-                  <td data-label="" className="full">
+                  <td data-label="Rôle" className="c-sub">
+                    {u.roleLabel ?? ROLE_LABELS[u.role]}
+                    {u.officeName && <span className="show-sm"> · {u.officeName}</span>}
+                  </td>
+                  <td data-label="Bureau" className="hide-sm">
+                    {u.officeName ?? <span className="muted">—</span>}
+                  </td>
+                  <td data-label="Téléphone" className="c-end">
+                    <a href={`tel:${u.phone}`} className="tel-link">
+                      {formatPhone(u.phone)}
+                    </a>
+                  </td>
+                  <td data-label="" className="full c-act">
                     {perms.staff && (u.role !== 'ADMIN' || session.user.role === 'ADMIN') && (
                       <div className="actions">
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'user', user: u })}>
@@ -1416,7 +1452,7 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
         )}
       </div>
 
-      <div className="kpis" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+      <div className="kpis fees-kpis">
         {Object.entries(totals).map(([cur, t]) => (
           <div className="kpi green" key={cur}>
             <span className="kpi-label">Recouvrement {cur}</span>
@@ -1529,9 +1565,9 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
 /* ========================================================== Point d'entrée */
 
 export const ADMIN_TABS = [
-  { id: 'students', label: 'Élèves' },
-  { id: 'classes', label: 'Classes & personnel' },
-  { id: 'fees', label: 'Frais' },
+  { id: 'students', label: 'Élèves', short: 'Élèves', icon: 'students' },
+  { id: 'classes', label: 'Classes & personnel', short: 'Classes', icon: 'classes' },
+  { id: 'fees', label: 'Frais', short: 'Frais', icon: 'fees' },
 ];
 
 export function AdminView({ tab, session, notify, onLogout, onSlow }) {

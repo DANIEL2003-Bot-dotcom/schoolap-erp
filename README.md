@@ -95,6 +95,28 @@ La route de base est réglée dans `dashboard/vite.config.js` : `base` vaut `VIT
 
 Le tableau de bord n'a **aucun mode visiteur ou démonstration** : il faut un compte du personnel administratif (voir la section 2bis).
 
+### 1.2 bis Tableau de bord sur téléphone (installable)
+
+Le tableau de bord s'adapte au téléphone (écrans de 360 px et plus) :
+- **navigation** : barre en bas de l'écran (Accueil, Élèves, Classes, Frais) ; le bouton Retour du téléphone revient à l'onglet précédent ;
+- **en-tête** : sur une ligne, avec le menu du profil (identité, bureau, installation, déconnexion) ;
+- **indicateurs** : deux par ligne ;
+- **listes compactes** : une ligne par élève, et la fiche s'ouvre d'un toucher ;
+- **formulaires** : en plein écran, avec les boutons d'action toujours visibles en bas.
+
+**Installation sur l'écran d'accueil :**
+- **Android** : bouton « Installer » (carte sur l'accueil ou menu du profil).
+- **iPhone** : dans Safari, **Partager → « Sur l'écran d'accueil »**.
+
+L'icône **« Direction »** s'ouvre en plein écran.
+
+**Sans réseau**, l'application s'ouvre quand même :
+- elle affiche les derniers chiffres consultés (7 dernières dates) avec la mention « Hors ligne » ;
+- ces chiffres sont actualisés automatiquement au retour du réseau ;
+- ils sont effacés de l'appareil à la déconnexion.
+
+La session reste ouverte au plus 12 heures, la durée du jeton. Sur un appareil partagé, utilisez **Se déconnecter**.
+
 ### 1.3 Espace Enseignant pour iPhone (application web installable, gratuite)
 
 **Lien à ouvrir dans Safari sur l'iPhone :** https://daniel2003-bot-dotcom.github.io/schoolap-erp/enseignant/
