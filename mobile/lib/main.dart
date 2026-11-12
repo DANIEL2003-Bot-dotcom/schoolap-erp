@@ -124,6 +124,7 @@ class Student {
     required this.lastName,
     required this.middleName,
     required this.firstName,
+    this.feeOk,
   });
   final String id;
   final String classId;
@@ -131,6 +132,10 @@ class Student {
   final String lastName;
   final String middleName;
   final String firstName;
+
+  /// « En ordre » avec les frais scolaires (autorisé à suivre les cours), calculé par l'école.
+  /// null : statut inconnu (données chargées avant cette version) → rien n'est affiché. Jamais de montant.
+  final bool? feeOk;
 
   /// Convention RDC : NOM POSTNOM Prénom
   String get fullName => [lastName.toUpperCase(), middleName.toUpperCase(), firstName].where((s) => s.isNotEmpty).join(' ');
@@ -143,6 +148,7 @@ class Student {
         lastName: r['last_name'] as String,
         middleName: (r['middle_name'] as String?) ?? '',
         firstName: r['first_name'] as String,
+        feeOk: r['fee_ok'] == null ? null : (r['fee_ok'] as int) == 1,
       );
 }
 
@@ -445,11 +451,16 @@ class LocalDb {
     final database = await f.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onCreate: (db, _) => _create(db),
         onUpgrade: (db, from, to) async {
           // v2 : date de première saisie des cotes (ordre chronologique pour les alertes de baisse)
           if (from < 2) await db.execute('ALTER TABLE grades ADD COLUMN created_at TEXT');
+          // v3 : statut « en ordre » avec les frais scolaires (rempli au prochain « Recharger »)
+          if (from < 3) {
+            final hasStudents = (await db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'students'")).isNotEmpty;
+            if (hasStudents) await db.execute('ALTER TABLE students ADD COLUMN fee_ok INTEGER');
+          }
         },
       ),
     );
@@ -462,7 +473,7 @@ class LocalDb {
     batch.execute('CREATE TABLE classes (id TEXT PRIMARY KEY, name TEXT NOT NULL, level TEXT NOT NULL, option TEXT)');
     batch.execute('''CREATE TABLE students (
       id TEXT PRIMARY KEY, class_id TEXT NOT NULL, matricule TEXT NOT NULL,
-      last_name TEXT NOT NULL, middle_name TEXT, first_name TEXT NOT NULL, sort_order INTEGER NOT NULL)''');
+      last_name TEXT NOT NULL, middle_name TEXT, first_name TEXT NOT NULL, sort_order INTEGER NOT NULL, fee_ok INTEGER)''');
     batch.execute('CREATE INDEX idx_students_class ON students(class_id, sort_order)');
     batch.execute('CREATE TABLE subjects (id TEXT PRIMARY KEY, name TEXT NOT NULL, default_max_score REAL NOT NULL)');
     batch.execute('''CREATE TABLE attendance (
@@ -519,6 +530,7 @@ class LocalDb {
             'middle_name': s['middleName'],
             'first_name': s['firstName'],
             'sort_order': order++,
+            'fee_ok': s['feeOk'] == null ? null : (s['feeOk'] == true ? 1 : 0),
           });
         }
       }
@@ -1871,6 +1883,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final absent = _entries.values.where((e) => !e.isPresent).length;
     final remaining = _students.length - _entries.length;
     final local = _entries.values.where((e) => e.state == SyncState.local).length;
+    final notInOrder = _students.where((s) => s.feeOk == false).length;
 
     return Column(
       children: [
@@ -1912,6 +1925,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   const SizedBox(width: 8),
                   _CountChip(label: 'Non pointés', value: remaining, color: kGrey),
                 ]),
+                if (notInOrder > 0) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    key: const Key('fee-note'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(color: kAbsentRed.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
+                    child: Text(
+                      notInOrder == 1
+                          ? '1 élève n’est pas en ordre avec les frais scolaires : orientez-le vers la Comptabilité.'
+                          : '$notInOrder élèves ne sont pas en ordre avec les frais scolaires : orientez-les vers la Comptabilité.',
+                      style: const TextStyle(color: kAbsentRed, fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
                 if (remaining > 0) ...[
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
@@ -1963,6 +1990,27 @@ class _CountChip extends StatelessWidget {
       );
 }
 
+/// Pastille « En ordre » / « Pas en ordre » avec les frais scolaires (sans montant).
+class FeeStatusBadge extends StatelessWidget {
+  const FeeStatusBadge({super.key, required this.studentId, required this.ok});
+  final String studentId;
+  final bool ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ok ? kPresentGreen : kAbsentRed;
+    return Semantics(
+      label: ok ? 'En ordre avec les frais' : 'Pas en ordre avec les frais',
+      child: Container(
+        key: ValueKey('fee-${ok ? 'ok' : 'ko'}-$studentId'),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(999)),
+        child: Text(ok ? 'En ordre' : 'Pas en ordre', style: TextStyle(color: color, fontSize: 10.5, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+}
+
 class AttendanceTile extends StatelessWidget {
   const AttendanceTile({super.key, required this.student, required this.entry, required this.onChanged});
   final Student student;
@@ -1985,7 +2033,12 @@ class AttendanceTile extends StatelessWidget {
         foregroundColor: statusColor,
         child: Text(student.initials, style: const TextStyle(fontWeight: FontWeight.bold)),
       ),
-      title: Text(student.fullName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+      title: Row(children: [
+        Flexible(
+          child: Text(student.fullName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ),
+        if (student.feeOk != null) ...[const SizedBox(width: 6), FeeStatusBadge(studentId: student.id, ok: student.feeOk!)],
+      ]),
       subtitle: Text.rich(
         TextSpan(children: [
           TextSpan(text: statusText, style: TextStyle(color: statusColor, fontWeight: FontWeight.w600)),

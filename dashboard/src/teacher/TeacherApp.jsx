@@ -86,6 +86,10 @@ main{flex:1;padding:14px;max-width:760px;width:100%;margin:0 auto}
 .item .who{flex:1;min-width:0}
 .item .who b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .who small{font-size:12px;color:var(--grey)}
+.fee-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;margin-left:6px;vertical-align:1px}
+.fee-tag.ok{background:#ecfdf3;color:var(--green)}
+.fee-tag.ko{background:#fef2f2;color:var(--red)}
+.fee-note{font-size:13px;background:#fef2f2;color:var(--red);border-radius:10px;padding:10px 12px;margin:0 0 12px}
 .seg{display:flex;border-radius:10px;overflow:hidden;border:1px solid #C9D3E1;flex:none}
 .seg button{border:0;background:#fff;width:52px;height:42px;font-weight:700;color:var(--grey);font-size:15px}
 .seg button.p[aria-pressed=true]{background:var(--green);color:#fff}
@@ -449,6 +453,8 @@ function AttendanceScreen({ cls, engine, sync }) {
   const present = students.filter((s) => entries.get(s.id)?.status === 'PRESENT').length;
   const absent = students.filter((s) => entries.get(s.id)?.status === 'ABSENT').length;
   const remaining = students.length - present - absent;
+  // « En ordre » avec les frais (calculé par l'école, sans montant) : absent des anciennes données hors ligne → non affiché.
+  const notInOrder = students.filter((s) => s.feeOk === false).length;
 
   return (
     <main>
@@ -473,6 +479,11 @@ function AttendanceScreen({ cls, engine, sync }) {
           <span>Restants</span>
         </div>
       </div>
+      {notInOrder > 0 && (
+        <p className="fee-note" role="note">
+          {notInOrder === 1 ? '1 élève n’est pas en ordre' : `${notInOrder} élèves ne sont pas en ordre`} avec les frais scolaires : orientez-les vers la Comptabilité.
+        </p>
+      )}
       <div className="list">
         {students.map((s, i) => {
           const e = entries.get(s.id);
@@ -484,6 +495,8 @@ function AttendanceScreen({ cls, engine, sync }) {
                 </b>
                 <small>
                   {s.matricule}
+                  {s.feeOk === true && <span className="fee-tag ok">En ordre</span>}
+                  {s.feeOk === false && <span className="fee-tag ko">Pas en ordre</span>}
                   {e?.status === 'ABSENT' && e.smsStatus === 'sent' ? ' · SMS envoyé au tuteur' : ''}
                   {e?.sync === 'rejected' ? <span className="err-text"> · {e.error}</span> : null}
                 </small>

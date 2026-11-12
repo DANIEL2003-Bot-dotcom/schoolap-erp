@@ -198,7 +198,8 @@ describe('Application mobile — bootstrap et synchronisation', () => {
 });
 
 describe('Paiements Mobile Money', () => {
-  const cashierToken = () => login(SEED_USERS.director.phone, PASSWORDS.director);
+  // Encaissement : Comptable et Administrateur uniquement (la direction ne manipule pas l'argent).
+  const cashierToken = () => login(SEED_USERS.bursar.phone, PASSWORDS.bursar);
 
   async function initiate(fee, overrides = {}) {
     const remaining = Number(fee.amountDue) - Number(fee.amountPaid);
@@ -403,10 +404,18 @@ describe('Tableau de bord du directeur', () => {
     assert.equal(res.body.absents.length, absentToday);
     assert.ok(res.body.absents.every((a) => a.smsSent === true));
     assert.deepEqual(res.body.attendance.classesPending, ['5e Primaire A']);
+    // Direction : taux de recouvrement en pourcentage, aucun montant.
+    assert.equal(res.body.insolvents, null);
+    const rate = res.body.finance.find((f) => f.currency === 'USD');
+    assert.ok(rate.recoveryRate > 0 && rate.recoveryRate < 1);
+    assert.equal(rate.due, undefined);
+
+    // Comptabilité : montants détaillés, cohérents avec la base.
+    const compta = await request(ctx.app).get('/api/dashboard/summary').set(auth(await login(SEED_USERS.bursar.phone, PASSWORDS.bursar)));
     const insolvent = await prisma.schoolFee.count({ where: { status: 'INSOLVABLE' } });
-    assert.equal(res.body.insolvents.length, insolvent);
-    const usd = res.body.finance.find((f) => f.currency === 'USD');
-    assert.ok(usd.recoveryRate > 0 && usd.recoveryRate < 1);
+    assert.equal(compta.body.insolvents.length, insolvent);
+    const usd = compta.body.finance.find((f) => f.currency === 'USD');
+    assert.equal(usd.recoveryRate, rate.recoveryRate);
     assert.equal(usd.outstanding, Number((usd.due - usd.paid).toFixed(2)));
 
     const bad = await request(ctx.app).get('/api/dashboard/summary?date=2026-02-30').set(auth(token));
@@ -414,8 +423,10 @@ describe('Tableau de bord du directeur', () => {
   });
 
   test('relance SMS d’un insolvable puis délai de 24 h → 429', async () => {
-    const token = await login(SEED_USERS.director.phone, PASSWORDS.director);
+    const token = await login(SEED_USERS.bursar.phone, PASSWORDS.bursar);
     const fee = await unpaidFee();
+    const director = await login(SEED_USERS.director.phone, PASSWORDS.director);
+    assert.equal((await request(ctx.app).post(`/api/fees/${fee.id}/remind`).set(auth(director))).status, 403);
     const res = await request(ctx.app).post(`/api/fees/${fee.id}/remind`).set(auth(token));
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.sms.status, 'sent');

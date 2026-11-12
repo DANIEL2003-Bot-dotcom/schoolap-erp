@@ -6,7 +6,7 @@ import { runSeed } from '../prisma/seed.js';
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://schoolap:schoolap@localhost:5432/schoolap_test';
 
-export const PASSWORDS = { director: 'Directeur@Test1', teacher: 'Enseignant@Test1', bursar: 'Comptable@Test1' };
+export const PASSWORDS = { director: 'Directeur@Test1', teacher: 'Enseignant@Test1', bursar: 'Comptable@Test1', admin: 'Admin@Test1' };
 
 export function testConfig(overrides = {}) {
   return loadConfig({
@@ -36,6 +36,7 @@ export async function resetDatabase(prisma) {
     directorPassword: PASSWORDS.director,
     teacherPassword: PASSWORDS.teacher,
     bursarPassword: PASSWORDS.bursar,
+    adminPassword: PASSWORDS.admin,
   });
 }
 

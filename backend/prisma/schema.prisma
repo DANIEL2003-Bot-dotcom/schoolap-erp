@@ -169,6 +169,8 @@ model School {
   epstCode  String   @unique @map("epst_code")
   city      String?
   phone     String?
+  /// Pourcentage minimum des frais exigibles (échéance atteinte) à avoir payé pour être « en ordre » et suivre les cours (0 à 100).
+  eligibilityThreshold Int @default(50) @map("eligibility_threshold")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

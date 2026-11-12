@@ -12,6 +12,7 @@ import { teacherRouter } from './routes/teacher.js';
 import { createAdminService } from './services/admin.js';
 import { createAttendanceService } from './services/attendance.js';
 import { createDashboardService } from './services/dashboard.js';
+import { createEligibilityService } from './services/eligibility.js';
 import { createFeesService } from './services/fees.js';
 import { createFinanceService } from './services/finance.js';
 import { createGradesService } from './services/grades.js';
@@ -28,8 +29,16 @@ export function createApp({ prisma, config, overrides = {} }) {
   const gradesService = createGradesService({ prisma, performance: performanceService });
   const mobileMoneyService = createMobileMoneyService({ prisma, sms, config, dispatchWebhook: overrides.dispatchWebhook });
   const financeService = createFinanceService({ prisma, sms, config });
-  const adminService = createAdminService({ prisma, config, finance: financeService });
-  const dashboardService = createDashboardService({ prisma, fees: feesService, performance: performanceService, finance: financeService, timezone: config.timezone });
+  const eligibilityService = createEligibilityService({ prisma, config });
+  const adminService = createAdminService({ prisma, config, finance: financeService, eligibility: eligibilityService });
+  const dashboardService = createDashboardService({
+    prisma,
+    fees: feesService,
+    performance: performanceService,
+    finance: financeService,
+    eligibility: eligibilityService,
+    timezone: config.timezone,
+  });
 
   const app = express();
   app.set('trust proxy', config.trustProxy);
@@ -82,17 +91,17 @@ export function createApp({ prisma, config, overrides = {} }) {
   const admin = dashboardRouters({ prisma, config, dashboardService, feesService, performanceService });
 
   app.use('/api/auth', authRouter({ prisma, config }));
-  app.use('/api/teacher', teacherRouter({ prisma, config, performanceService }));
+  app.use('/api/teacher', teacherRouter({ prisma, config, performanceService, eligibilityService }));
   app.use('/api/attendance', sync.attendance);
   app.use('/api/grades', sync.grades);
   app.use('/api/payments', paymentsRouter({ prisma, config, mobileMoneyService }));
   app.use('/api/finance', financeRouter({ prisma, config, financeService }));
   app.use('/api/dashboard', admin.dashboard);
   app.use('/api/fees', admin.fees);
-  app.use('/api/admin', adminRouter({ prisma, config, adminService, performanceService }));
+  app.use('/api/admin', adminRouter({ prisma, config, adminService, performanceService, eligibilityService }));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  return { app, services: { sms, financeService, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService } };
+  return { app, services: { sms, financeService, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService, eligibilityService } };
 }

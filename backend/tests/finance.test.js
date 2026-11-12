@@ -11,6 +11,7 @@ import { PASSWORDS, buildApp, createPrisma, resetDatabase } from './helpers.js';
 const prisma = createPrisma();
 let ctx;
 let director;
+let admin;
 let bursar;
 
 async function login(phone, password) {
@@ -37,6 +38,7 @@ beforeEach(async () => {
   ctx = buildApp(prisma);
   director = await login(SEED_USERS.director.phone, PASSWORDS.director);
   bursar = await login(SEED_USERS.bursar.phone, PASSWORDS.bursar);
+  admin = await login(SEED_USERS.admin.phone, PASSWORDS.admin);
 });
 
 describe('Montant en toutes lettres', () => {
@@ -59,23 +61,27 @@ describe('Montant en toutes lettres', () => {
 });
 
 describe('Droits du comptable', () => {
-  test('ne crée ni ne modifie plus les frais ; la direction le peut toujours', async () => {
+  test('gère les frais avec l’administrateur ; la direction ne crée, ne modifie ni n’encaisse plus rien', async () => {
     const cls = await prisma.class.findFirstOrThrow({ where: { name: '5e Primaire A' } });
     const body = { classIds: [cls.id], feeType: 'AUTRE', label: 'Excursion', amountDue: 15, currency: 'USD', dueDate: '2027-03-01' };
-    const refused = await api('post', '/api/admin/fees/bulk').send(body);
-    assert.equal(refused.status, 403);
     const fee = await unpaidFee();
-    assert.equal((await api('patch', `/api/admin/fees/${fee.id}`).send({ amountDue: 1 })).status, 403, 'pas de remise par le comptable');
+    assert.equal((await api('post', '/api/admin/fees/bulk', director).send(body)).status, 403);
+    assert.equal((await api('patch', `/api/admin/fees/${fee.id}`, director).send({ amountDue: 1 })).status, 403, 'pas de remise par la direction');
     assert.equal(Number((await prisma.schoolFee.findUniqueOrThrow({ where: { id: fee.id } })).amountDue), Number(fee.amountDue));
+    assert.equal((await pay(fee, {}, director)).status, 403, 'la direction n’encaisse pas');
+    assert.equal((await api('get', '/api/finance/payments', director)).status, 403, 'ni journal de caisse');
+    assert.equal((await api('get', `/api/finance/summary`, director)).status, 403);
 
-    assert.equal((await api('post', '/api/admin/fees/bulk', director).send(body)).status, 201);
-    assert.equal((await api('patch', `/api/admin/fees/${fee.id}`, director).send({ dueDate: '2027-06-30' })).status, 200);
+    assert.equal((await api('post', '/api/admin/fees/bulk').send(body)).status, 201);
+    assert.equal((await api('patch', `/api/admin/fees/${fee.id}`).send({ dueDate: '2027-06-30' })).status, 200);
+    const other = { ...body, label: 'Uniforme' };
+    assert.equal((await api('post', '/api/admin/fees/bulk', admin).send(other)).status, 201);
   });
 
   test('voit les finances, pas la vie scolaire (présences, résultats, alertes, personnel)', async () => {
     const summary = await api('get', '/api/dashboard/summary');
     assert.equal(summary.status, 200);
-    assert.deepEqual(summary.body.access, { academic: false, cashier: true });
+    assert.deepEqual(summary.body.access, { academic: false, cashier: true, amounts: true });
     assert.equal(summary.body.attendance, null);
     assert.deepEqual(summary.body.absents, []);
     assert.equal(summary.body.performanceAlerts, null);
@@ -96,13 +102,20 @@ describe('Droits du comptable', () => {
     assert.equal(detail.body.performance, null);
     assert.ok(detail.body.fees.length > 0);
 
-    // La direction garde la vue complète.
+    assert.ok(Array.isArray(detail.body.transactions), "la comptabilité voit les paiements");
+
+    // La direction garde la vie scolaire, mais sans montant.
     const full = await api('get', `/api/admin/students/${fee.studentId}`, director);
     assert.notEqual(full.body.attendance, null);
     assert.notEqual(full.body.performance, null);
+    assert.equal(full.body.transactions, null);
     const dirSummary = await api('get', '/api/dashboard/summary', director);
-    assert.deepEqual(dirSummary.body.access, { academic: true, cashier: true });
+    assert.deepEqual(dirSummary.body.access, { academic: true, cashier: false, amounts: false });
     assert.notEqual(dirSummary.body.attendance, null);
+    assert.equal(dirSummary.body.cash, null);
+    // L'administrateur voit tout.
+    const adminSummary = await api('get', '/api/dashboard/summary', admin);
+    assert.deepEqual(adminSummary.body.access, { academic: true, cashier: true, amounts: true });
   });
 
   test('peut encore inscrire des élèves et relancer, pas les enseignants ni le D.E. à la caisse', async () => {
@@ -183,7 +196,7 @@ describe('Encaissement manuel et reçu', () => {
   test('deux caisses encaissent le même solde au même moment : un seul passe, numéros sans trou', async () => {
     const fee = await unpaidFee();
     const amount = Number(fee.amountDue);
-    const [a, b] = await Promise.all([pay(fee, { amount }), pay(fee, { amount }, director)]);
+    const [a, b] = await Promise.all([pay(fee, { amount }), pay(fee, { amount }, admin)]);
     assert.deepEqual([a.status, b.status].sort(), [201, 409]);
     assert.equal(Number((await prisma.schoolFee.findUniqueOrThrow({ where: { id: fee.id } })).amountPaid), amount);
     const next = await pay(await unpaidFee({ id: { not: fee.id } }), { amount: 1 });
@@ -249,13 +262,13 @@ describe('Journal de caisse et annulation', () => {
     const f1 = await unpaidFee();
     const f2 = await unpaidFee({ id: { not: f1.id } });
     await pay(f1, { amount: 20 });
-    await pay(f2, { amount: 15, method: 'BANK', bankName: 'TMB', externalRef: 'T-1' }, director);
+    await pay(f2, { amount: 15, method: 'BANK', bankName: 'TMB', externalRef: 'T-1' }, admin);
     const j = await api('get', `/api/finance/payments?from=${today()}&to=${today()}`);
     assert.equal(j.status, 200);
     assert.equal(j.body.count, 2);
     assert.deepEqual(j.body.totals, [{ currency: 'USD', total: 35 }]);
     assert.deepEqual(j.body.byMethod.map((m) => [m.method, m.count, m.totals.USD]).sort(), [['BANK', 1, 15], ['CASH', 1, 20]]);
-    assert.deepEqual(j.body.byCashier.map((c) => [c.cashier, c.totals.USD]).sort(), [[SEED_USERS.bursar.fullName, 20], [SEED_USERS.director.fullName, 15]]);
+    assert.deepEqual(j.body.byCashier.map((c) => [c.cashier, c.totals.USD]).sort(), [[SEED_USERS.admin.fullName, 15], [SEED_USERS.bursar.fullName, 20]]);
     assert.equal(j.body.payments[0].receiptNumber, `000001/${year()}`);
     const cashOnly = await api('get', '/api/finance/payments?method=CASH');
     assert.equal(cashOnly.body.count, 1);
@@ -268,25 +281,25 @@ describe('Journal de caisse et annulation', () => {
     assert.equal((await api('get', '/api/finance/payments?from=2026-10-15&to=2026-10-01')).status, 400);
   });
 
-  test('annulation : direction seule, motif obligatoire, frais rétabli, reçu conservé et tuteur prévenu', async () => {
+  test('annulation : comptable ou administrateur, motif obligatoire, frais rétabli, reçu conservé et tuteur prévenu', async () => {
     const fee = await unpaidFee();
     const { body } = await pay(fee, { amount: Number(fee.amountDue), method: 'BANK', bankName: 'Rawbank', externalRef: 'R-9' });
     assert.equal((await prisma.schoolFee.findUniqueOrThrow({ where: { id: fee.id } })).status, 'SOLDE');
     const id = body.receipt.id;
 
-    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`).send({ reason: 'Erreur de montant' })).status, 403, 'le comptable ne peut pas annuler');
-    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`, director).send({ reason: 'x' })).status, 400);
-    const cancelled = await api('post', `/api/finance/payments/${id}/cancel`, director).send({ reason: 'Erreur de montant' });
+    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`, director).send({ reason: 'Erreur de montant' })).status, 403, 'la direction ne peut pas annuler');
+    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`).send({ reason: 'x' })).status, 400);
+    const cancelled = await api('post', `/api/finance/payments/${id}/cancel`).send({ reason: 'Erreur de montant' });
     assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
     assert.equal(cancelled.body.receipt.status, 'CANCELLED');
     assert.equal(cancelled.body.receipt.cancelled.reason, 'Erreur de montant');
-    assert.equal(cancelled.body.receipt.cancelled.by, SEED_USERS.director.fullName);
+    assert.equal(cancelled.body.receipt.cancelled.by, SEED_USERS.bursar.fullName);
     assert.match(cancelled.body.sms.message, /a ete annule/);
 
     const restored = await prisma.schoolFee.findUniqueOrThrow({ where: { id: fee.id } });
     assert.equal(Number(restored.amountPaid), 0);
     assert.notEqual(restored.status, 'SOLDE');
-    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`, director).send({ reason: 'Encore une fois' })).status, 409);
+    assert.equal((await api('post', `/api/finance/payments/${id}/cancel`, admin).send({ reason: 'Encore une fois' })).status, 409);
 
     const j = await api('get', '/api/finance/payments');
     assert.equal(j.body.count, 0);

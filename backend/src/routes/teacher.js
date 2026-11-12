@@ -11,8 +11,9 @@ const alertParams = z.object({ alertId: z.uuid({ error: 'Identifiant d’alerte 
  * Tout ce dont l'application mobile a besoin pour fonctionner hors-ligne :
  * classes de l'enseignant, élèves, matières, appel du jour, cotes déjà synchronisés
  * et alertes de baisse des résultats en cours (les moyennes se calculent sur l'appareil, hors-ligne).
+ * Chaque élève porte `feeOk` : « En ordre » avec les frais (autorisé à suivre les cours) — jamais de montant.
  */
-export function teacherRouter({ prisma, config, performanceService }) {
+export function teacherRouter({ prisma, config, performanceService, eligibilityService }) {
   const router = Router();
   router.use(requireAuth({ prisma, config }), requirePermission('TAKE_ATTENDANCE'));
 
@@ -39,10 +40,11 @@ export function teacherRouter({ prisma, config, performanceService }) {
 
     const classIds = classes.map((c) => c.id);
     const studentIds = classes.flatMap((c) => c.students.map((s) => s.id));
-    const [attendance, grades, alerts] = await Promise.all([
+    const [attendance, grades, alerts, standing] = await Promise.all([
       prisma.attendance.findMany({ where: { classId: { in: classIds }, date: toDbDate(today) } }),
       prisma.grade.findMany({ where: { studentId: { in: studentIds } } }),
       performanceService.listForUser(user),
+      eligibilityService.forStudents(user.schoolId, { studentIds, dateIso: today }),
     ]);
 
     res.json({
@@ -55,7 +57,7 @@ export function teacherRouter({ prisma, config, performanceService }) {
         name: c.name,
         level: c.level,
         option: c.option,
-        students: c.students,
+        students: c.students.map((s) => ({ ...s, feeOk: standing.statuses.get(s.id)?.eligible ?? true })),
       })),
       subjects: subjects.map((s) => ({ id: s.id, name: s.name, defaultMaxScore: Number(s.defaultMaxScore) })),
       attendance: attendance.map((a) => ({

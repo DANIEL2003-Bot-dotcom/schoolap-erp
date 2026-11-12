@@ -125,8 +125,10 @@ Ouvrez **http://localhost:5174** et connectez-vous :
 | Rôle | Téléphone | Mot de passe |
 |---|---|---|
 | Directeur | `0990000001` | `Directeur@2026` |
+| Administrateur | `0990000010` | `Admin@2026` |
+| Comptable | `0850000004` | `Comptable@2026` |
 
-Vous accédez au tableau de bord (taux de présence, absents, recouvrement) et aux onglets **Élèves**, **Classes & personnel** et **Frais**. Rien n'est à configurer : le serveur de développement relaie automatiquement `/api` vers `localhost:4000`.
+Vous accédez au tableau de bord (taux de présence, absents, recouvrement) et aux onglets **Élèves**, **Classes & personnel** et **Frais**. Le Directeur ne voit les frais qu'en **pourcentage**, avec la liste des élèves « Pas en ordre ». Les montants sont réservés au Comptable et à l'Administrateur. Rien n'est à configurer : le serveur de développement relaie automatiquement `/api` vers `localhost:4000`.
 
 ### A4. L'application mobile des enseignants (facultatif)
 
@@ -178,7 +180,10 @@ L'adresse du serveur peut aussi être changée plus tard sur l'écran de connexi
    - Dans « Insolvables », cliquez sur **« Encaisser »** et choisissez Espèces, Banque (banque et numéro de bordereau) ou Mobile Money reçu sur le téléphone de l'école (opérateur et référence).
    - Validez : le reçu numéroté s'affiche. Cliquez sur **« Imprimer A4 (2 exemplaires) »** ou sur **« Ticket 80 mm »**.
    - L'onglet **Caisse** montre le journal du jour et la clôture par caissier.
-   - Le Comptable ne peut ni créer ni modifier un frais, ni annuler un reçu. Connecté en Directeur, ouvrez le reçu dans **Caisse**, puis **« Annuler ce reçu »**.
+   - Une erreur de saisie ? Ouvrez le reçu dans **Caisse**, puis **« Annuler ce reçu »** (motif obligatoire). Seuls le Comptable et l'Administrateur peuvent annuler un reçu ou créer et modifier un frais.
+   - **Seuil « en ordre »** : connecté en Administrateur, onglet **Frais**, fixez le pourcentage minimum des frais échus à payer (50 % par défaut) puis cliquez sur **« Enregistrer le seuil »**.
+   - Reconnectez-vous en Directeur : aucun montant n'apparaît. Vous voyez le taux de recouvrement, le % payé par élève et par classe, et la carte **« Élèves pas en ordre »**. L'onglet Élèves peut être filtré sur « Pas en ordre ».
+   - Côté enseignant, l'écran d'appel affiche **« En ordre »** ou **« Pas en ordre »** à côté de chaque élève, sans aucun montant (touchez « Recharger les listes » pour mettre le statut à jour).
 6. **Moyennes et alertes** : dans l'onglet **Cotes**, saisissez pour un même élève 16 puis 15 (Interrogation 1 et 2), puis 7 (Devoir).
    - La moyenne de l'élève s'affiche sous son nom.
    - L'onglet **Moyennes** le signale « Baisse des résultats ».

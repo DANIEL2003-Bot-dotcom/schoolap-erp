@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ADMIN_CSS, AdminView, adminTabsFor } from './admin.jsx';
 import { CollectModal, FINANCE_CSS, ReceiptModal, createFinanceApi } from './finance.jsx';
+import { FeeStandingCard, STANDING_CSS } from './standing.jsx';
 import { PERF_CSS, PerformanceCard } from './performance.jsx';
 import {
   API_URL,
@@ -34,6 +35,8 @@ import { BottomNav, InstallCard, IosInstallSheet, MOBILE_CSS, UserMenu, isIOS, i
    - Tableau des insolvables : « Relancer par SMS » + encaissement (espèces, banque, Mobile Money)
    - Comptable : accueil 100 % finances (caisse du jour, recouvrement, insolvables),
      sans présences ni résultats scolaires
+   - Montants réservés au Comptable et à l'Administrateur : la Direction voit le
+     taux de recouvrement en % et les élèves « pas en ordre » (seuil réglable)
    ============================================================================= */
 
 const SESSION_KEY = 'erp.directeur.session';
@@ -698,6 +701,13 @@ function Dashboard({ session, onLogout }) {
     if (online && staleAt) load(true);
   }, [online, staleAt, load]);
 
+  // Retour sur l'accueil depuis un autre onglet (encaissement, seuil « en ordre » modifié…) : chiffres rechargés.
+  const previousTab = useRef(tab);
+  useEffect(() => {
+    if (tab === 'dashboard' && previousTab.current !== 'dashboard') load(true);
+    previousTab.current = tab;
+  }, [tab, load]);
+
   useEffect(() => {
     if (date !== today || tab !== 'dashboard') return undefined;
     const timer = setInterval(() => {
@@ -733,6 +743,7 @@ function Dashboard({ session, onLogout }) {
 
   // Comptabilité : pas de vie scolaire (l'API renvoie attendance = null), accueil centré sur la caisse.
   const academic = data?.access?.academic ?? can(session.user, 'VIEW_ACADEMIC');
+  const amounts = data?.access?.amounts ?? can(session.user, 'VIEW_AMOUNTS');
   const att = data?.attendance;
   const cashUsd = data?.cash?.totals?.find((t) => t.currency === 'USD')?.total ?? 0;
   const cashCdf = data?.cash?.totals?.find((t) => t.currency === 'CDF')?.total ?? 0;
@@ -851,7 +862,7 @@ function Dashboard({ session, onLogout }) {
                   bar={usd?.recoveryRate ?? 0}
                   foot={usd ? `${formatMoney(usd.paid)} encaissés sur ${formatMoney(usd.due)} exigibles` : 'Aucun frais exigible'}
                 />
-                <Kpi tone="red" label="Frais insolvables" value={data.insolvents.length} foot={`Reste à recouvrer : ${formatMoney(outstandingTotal)}`} />
+                <Kpi tone="red" label="Frais insolvables" value={data.insolvents?.length ?? 0} foot={`Reste à recouvrer : ${formatMoney(outstandingTotal)}`} />
                 <Kpi
                   tone="grey"
                   label="Modes de paiement"
@@ -879,10 +890,23 @@ function Dashboard({ session, onLogout }) {
                   value={formatPct(usd?.recoveryRate ?? null)}
                   bar={usd?.recoveryRate ?? 0}
                   foot={
-                    usd ? `${formatMoney(usd.paid)} encaissés sur ${formatMoney(usd.due)} exigibles${cdf ? ` · ${formatPct(cdf.recoveryRate)} en FC` : ''}` : 'Aucun frais exigible'
+                    !usd
+                      ? 'Aucun frais exigible'
+                      : amounts
+                        ? `${formatMoney(usd.paid)} encaissés sur ${formatMoney(usd.due)} exigibles${cdf ? ` · ${formatPct(cdf.recoveryRate)} en FC` : ''}`
+                        : `Part des frais échus déjà payée${cdf ? ` · ${formatPct(cdf.recoveryRate)} en FC` : ''}`
                   }
                 />
-                <Kpi tone="grey" label="SMS envoyés" value={data.smsSentToday} foot="Absences, résultats, relances et reçus du jour" />
+                {amounts || !data.feeStanding ? (
+                  <Kpi tone="grey" label="SMS envoyés" value={data.smsSentToday} foot="Absences, résultats, relances et reçus du jour" />
+                ) : (
+                  <Kpi
+                    tone={data.feeStanding.notEligibleCount > 0 ? 'red' : 'green'}
+                    label="Élèves pas en ordre"
+                    value={data.feeStanding.notEligibleCount}
+                    foot={`${formatPct(data.feeStanding.eligibleRate)} des élèves en ordre (seuil ${data.feeStanding.threshold} %)`}
+                  />
+                )}
               </>
             )}
           </section>
@@ -1019,6 +1043,9 @@ function Dashboard({ session, onLogout }) {
             />
           )}
 
+          {!amounts && <FeeStandingCard data={data ? data.feeStanding : null} mobile={mobile} limit={MOBILE_LIST_LIMIT} />}
+
+          {amounts && (
           <section className="card" aria-labelledby="ins-title">
             <div className="card-head">
               <h2 id="ins-title">Comptabilité — élèves insolvables</h2>
@@ -1136,6 +1163,13 @@ function Dashboard({ session, onLogout }) {
               </div>
             )}
           </section>
+          )}
+
+          {amounts && data?.feeStanding && (
+            <div style={{ marginTop: 24 }}>
+              <FeeStandingCard data={data.feeStanding} mobile={mobile} limit={MOBILE_LIST_LIMIT} />
+            </div>
+          )}
         </main>
       )}
 
@@ -1356,7 +1390,7 @@ export default function App() {
 
   return (
     <>
-      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + FINANCE_CSS + MOBILE_CSS}</style>
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + FINANCE_CSS + STANDING_CSS + MOBILE_CSS}</style>
       {content}
     </>
   );

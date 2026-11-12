@@ -19,6 +19,7 @@ export const SEED_USERS = Object.freeze({
   teacher1: { phone: '+243970000002', fullName: 'Kambale Jean' },
   teacher2: { phone: '+243810000003', fullName: 'Kavira Esther' },
   bursar: { phone: '+243850000004', fullName: 'Furaha Kavugho Grâce' },
+  admin: { phone: '+243990000010', fullName: 'Bahati Mukeba Patrick' },
 });
 
 /** Générateur pseudo-aléatoire déterministe (mulberry32) : données identiques à chaque seed. */
@@ -77,6 +78,7 @@ export async function runSeed(prisma, opts = {}) {
   const directorPassword = opts.directorPassword ?? process.env.SEED_DIRECTOR_PASSWORD ?? 'Directeur@2026';
   const teacherPassword = opts.teacherPassword ?? process.env.SEED_TEACHER_PASSWORD ?? 'Enseignant@2026';
   const bursarPassword = opts.bursarPassword ?? process.env.SEED_BURSAR_PASSWORD ?? 'Comptable@2026';
+  const adminPassword = opts.adminPassword ?? process.env.SEED_ADMIN_PASSWORD ?? 'Admin@2026';
   const rand = rng(opts.randomSeed ?? 427);
   const pick = (arr) => arr[Math.floor(rand() * arr.length)];
 
@@ -86,7 +88,9 @@ export async function runSeed(prisma, opts = {}) {
     return { skipped: true, schoolId: existing.id };
   }
 
-  const [directorHash, teacherHash, bursarHash] = await Promise.all([bcrypt.hash(directorPassword, 10), bcrypt.hash(teacherPassword, 10), bcrypt.hash(bursarPassword, 10)]);
+  const [directorHash, teacherHash, bursarHash, adminHash] = await Promise.all(
+    [directorPassword, teacherPassword, bursarPassword, adminPassword].map((pwd) => bcrypt.hash(pwd, 10)),
+  );
   const schoolYear = schoolYearOf(today);
 
   const result = await prisma.$transaction(
@@ -110,6 +114,9 @@ export async function runSeed(prisma, opts = {}) {
       });
       users.bursar = await tx.user.create({
         data: { schoolId: school.id, ...SEED_USERS.bursar, passwordHash: bursarHash, role: 'BURSAR', officeId: offices.COMPTABILITE },
+      });
+      users.admin = await tx.user.create({
+        data: { schoolId: school.id, ...SEED_USERS.admin, passwordHash: adminHash, role: 'ADMIN', officeId: offices.DIRECTION },
       });
 
       await tx.subject.createMany({ data: SUBJECTS.map((s) => ({ ...s, schoolId: school.id })) });
@@ -288,6 +295,7 @@ export async function runSeed(prisma, opts = {}) {
   log(`[seed] Directeur  : ${SEED_USERS.director.phone}  (mot de passe : SEED_DIRECTOR_PASSWORD)`);
   log(`[seed] Enseignants: ${SEED_USERS.teacher1.phone}, ${SEED_USERS.teacher2.phone}  (mot de passe : SEED_TEACHER_PASSWORD)`);
   log(`[seed] Comptable  : ${SEED_USERS.bursar.phone}  (mot de passe : SEED_BURSAR_PASSWORD)`);
+  log(`[seed] Admin      : ${SEED_USERS.admin.phone}  (mot de passe : SEED_ADMIN_PASSWORD)`);
   return result;
 }
 

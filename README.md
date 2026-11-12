@@ -158,10 +158,11 @@ L'URL du serveur reste modifiable depuis l'écran de connexion (*Paramètres du 
 
 | Rôle | Téléphone | Mot de passe par défaut | Classes |
 |---|---|---|---|
-| Directeur — bureau Direction | `+243 990 000 001` | `Directeur@2026` | toutes (dashboard) |
+| Administrateur — bureau Direction | `+243 990 000 010` | `Admin@2026` (variable `SEED_ADMIN_PASSWORD`) | toutes (dashboard, montants, seuil « en ordre ») |
+| Directeur — bureau Direction | `+243 990 000 001` | `Directeur@2026` | toutes (dashboard, pourcentages sans montants) |
 | Enseignant — Salle des professeurs | `+243 970 000 002` | `Enseignant@2026` | 5e Primaire A, 4e Humanités Scientifique |
 | Enseignante — Salle des professeurs | `+243 810 000 003` | `Enseignant@2026` | 3e Humanités Commerciale |
-| Comptable — Comptabilité / Caisse | `+243 850 000 004` | `Comptable@2026` | — (caisse, élèves, frais en consultation) |
+| Comptable — Comptabilité / Caisse | `+243 850 000 004` | `Comptable@2026` | — (caisse, élèves, création et modification des frais) |
 
 Contenu du seed :
 - 42 élèves ;
@@ -194,8 +195,12 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 | Classes, titulaires, matières | ✓ | ✓ | ✓ | ✓ | — | — | — |
 | Présences, résultats scolaires, personnel (consultation) | ✓ | ✓ | ✓ | ✓ | ✓ | — | — |
 | Inscriptions et import d'élèves | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
-| Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, relances SMS | ✓ | ✓ | ✓ | — | — | ✓ | — |
-| Créer ou modifier des frais (remises, reports), annuler un reçu | ✓ | ✓ | ✓ | — | — | — | — |
+| Voir les montants ($ / FC) : soldes, caisse, reçus, insolvables | ✓ | — | — | — | — | ✓ | — |
+| Frais en pourcentage : taux de recouvrement, % payé par élève et par classe, élèves « Pas en ordre » | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, relances SMS | ✓ | — | — | — | — | ✓ | — |
+| Créer ou modifier des frais (remises, reports), annuler un reçu | ✓ | — | — | — | — | ✓ | — |
+| Fixer le seuil « en ordre avec les frais » | ✓ | — | — | — | — | — | — |
+| Statut « En ordre / Pas en ordre » à l'appel (sans montant ni pourcentage) | — | — | — | — | — | — | ses classes |
 | Appel (application mobile) | ✓ | ✓ | ✓ | ✓ | ✓ | — | ses classes |
 | Saisie des cotes (application mobile) | ✓ | ✓ | ✓ | ✓ | — | — | ses classes |
 
@@ -203,7 +208,15 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 - Seul un **Administrateur** peut créer ou modifier un compte Administrateur. Personne ne peut changer son propre rôle ni désactiver son propre compte.
 - Les comptes sont créés par l'administration (**Classes & personnel → + Nouveau compte**). Le mot de passe initial doit compter **8 caractères minimum avec au moins une lettre et un chiffre**. Il est stocké uniquement sous forme de **hachage bcrypt (coût 12, sel aléatoire)** et n'est jamais renvoyé par l'API.
 - Le **tableau de bord est entièrement verrouillé** : il n'existe aucun mode visiteur ou démonstration. Sans jeton valide, seule la page de connexion s'affiche. Au démarrage, la session est vérifiée auprès de l'API (`/api/auth/me`) avant tout affichage. Un jeton expiré, falsifié ou appartenant à un compte désactivé ramène immédiatement à la connexion.
-- Le **Comptable** encaisse et imprime les reçus, mais ne crée ni ne modifie aucun frais et ne peut pas annuler un reçu : seuls le Préfet, le Directeur et l'Administrateur le peuvent. Son tableau de bord n'affiche que les finances (caisse du jour, recouvrement, insolvables) ; présences, résultats et personnel lui sont masqués, côté écran comme côté API.
+- **L'argent reste à la Comptabilité.** Seuls le **Comptable** et l'**Administrateur** voient des montants en dollars ou en francs. Ils encaissent, impriment les reçus, créent et modifient les frais (remises, reports d'échéance) et annulent un reçu. Le tableau de bord du Comptable n'affiche que les finances (caisse du jour, recouvrement, insolvables). Les présences, les résultats et le personnel lui sont masqués, côté écran comme côté API.
+- **Directeur, Préfet, D.E. et D.D.** ne voient que des pourcentages :
+  - le taux de recouvrement ;
+  - le % des frais échus payé par chaque élève et la moyenne par classe ;
+  - la liste des élèves « Pas en ordre ».
+
+  L'API ne leur envoie aucun montant : les sommes dues, payées et restantes, la caisse, les paiements et les reçus sont retirés des réponses, pas seulement cachés à l'écran.
+- **En ordre avec les frais** : un élève est « en ordre » s'il a payé au moins le **seuil** fixé par l'Administrateur (50 % par défaut, onglet Frais → « Seuil en ordre ») des frais de l'année déjà échus. Les frais pas encore arrivés à échéance ne comptent pas. Un élève sans frais échu est en ordre. Si l'élève a des frais en plusieurs devises, c'est le pourcentage le plus faible qui compte.
+- **Enseignants** : à l'appel, l'application Android et l'application web (iPhone) affichent « En ordre » ou « Pas en ordre » à côté de chaque élève. Le statut est gardé hors ligne avec les listes et mis à jour à chaque « Recharger les listes ». Aucun montant ni pourcentage n'est affiché. L'appel n'est jamais bloqué : l'enseignant oriente simplement l'élève vers la Comptabilité.
 - Les routes de caisse et d'encaissement Mobile Money exigent un jeton et le droit « Caisse ». Seul le webhook de l'opérateur reste public, protégé par sa signature HMAC.
 - Sur la page de connexion comme dans le formulaire de compte, l'**icône œil** affiche ou masque le mot de passe saisi.
 
@@ -256,10 +269,10 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 | GET | `/api/health` | public | Santé (avec ping de la base) |
 | POST | `/api/auth/login` | public (10 / 15 min / IP) | `{phone, password}` → JWT |
 | GET | `/api/auth/me` | JWT | Profil : rôle, bureau, droits, école (vérification de session du dashboard) |
-| GET | `/api/teacher/bootstrap` | droit « Appel » | Classes, élèves, matières, appel du jour et cotes, pour le mode hors ligne |
+| GET | `/api/teacher/bootstrap` | droit « Appel » | Classes, élèves (avec `feeOk` : en ordre avec les frais), matières, appel du jour et cotes, pour le mode hors ligne |
 | POST | `/api/attendance/sync` | droit « Appel » | Lot de présences (500 max) |
 | POST | `/api/grades/sync` | droit « Cotes » | Lot de cotes |
-| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, caisse du jour, insolvables ; absents et résultats seulement avec le droit « Vie scolaire » |
+| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, `feeStanding` (élèves en ordre / pas en ordre, % par classe) ; caisse du jour, montants et insolvables seulement avec le droit « Montants » ; absents et résultats seulement avec le droit « Vie scolaire » |
 | POST | `/api/fees/:feeId/remind` | droit « Caisse » | Relance SMS (1 par 24 h et par frais, sinon 429) |
 | POST | `/api/finance/payments` | droit « Caisse » | Encaissement manuel `{clientRequestId, schoolFeeId, amount, method: CASH\|BANK\|MOBILE_MONEY_DIRECT, bankName?, externalRef?, operator?, payerPhone?, payerName?, note?}` → 201 + reçu numéroté (rejouable sans doublon) |
 | GET | `/api/finance/payments?from=&to=&method=` | droit « Caisse » | Journal de caisse (31 jours max) : totaux par mode et par caissier |
@@ -270,15 +283,16 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 | POST | `/api/payments/mobile-money` | JWT + droit « Caisse » (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
 | POST | `/api/payments/mobile-money/webhook` | signature HMAC | Confirmation de l'opérateur (émet aussi un reçu numéroté) |
 | GET | `/api/payments/mobile-money/:transactionId` | JWT + droit « Caisse » | Suivi du paiement |
-| GET | `/api/admin/overview` | droit « Consultation » | Classes (titulaire, effectif), bureaux, personnel, rôles attribuables, matières |
+| GET | `/api/admin/overview` | droit « Consultation » | Classes (titulaire, effectif), bureaux, personnel, rôles attribuables, matières, réglages (`settings.eligibilityThreshold`) |
+| PATCH | `/api/admin/settings` | droit « Réglages » (Administrateur) | `{eligibilityThreshold}` : seuil « en ordre » en %, entier de 0 à 100 |
 | POST / PATCH / DELETE | `/api/admin/classes[/:id]` | droit « Classes » | Classes ; nom unique (409) ; suppression seulement si aucun élève |
 | POST / PATCH | `/api/admin/users[/:id]` | droit « Personnel » | Comptes Préfet / Directeur / D.E. / D.D. / Comptable / Enseignant, bureau, mot de passe (bcrypt 12), activation |
 | POST / PATCH | `/api/admin/subjects[/:id]` | droit « Classes » | Matières et note maximale par défaut |
-| GET | `/api/admin/students?classId=&q=&status=&page=` | droit « Consultation » | Liste paginée + reste à payer |
-| GET | `/api/admin/students/:id` | droit « Consultation » | Fiche : frais, paiements, assiduité |
+| GET | `/api/admin/students?classId=&q=&status=&standing=all\|eligible\|not_eligible&page=` | droit « Consultation » | Liste paginée, statut `feeStanding` (en ordre, % payé) ; reste à payer seulement avec le droit « Montants » |
+| GET | `/api/admin/students/:id` | droit « Consultation » | Fiche : statut des frais, assiduité ; montants, paiements et reçus seulement avec le droit « Montants » (sinon % payé par frais) |
 | POST / PATCH | `/api/admin/students[/:id]` | droit « Inscriptions » | Inscription (matricule auto, frais de la classe), transfert, désinscription |
 | POST | `/api/admin/students/import` | droit « Inscriptions » | Import CSV `{classId, csv, dryRun}` (1 000 lignes max, tout ou rien) |
-| GET | `/api/admin/fees/summary` | droit « Consultation » | Synthèse par frais (attendu, encaissé, statuts) |
+| GET | `/api/admin/fees/summary` | droit « Consultation » | Synthèse par frais : taux de recouvrement et statuts ; attendu et encaissé seulement avec le droit « Montants » |
 | POST | `/api/admin/fees/bulk` | droit « Frais » | Frais pour une ou plusieurs classes (idempotent) |
 | PATCH | `/api/admin/fees/:id` | droit « Frais » | Remise / report ; montant dû ≥ déjà payé ; statut recalculé |
 
@@ -360,7 +374,7 @@ Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et 
 
   Dès la deuxième impression, le reçu porte la mention **DUPLICATA**.
 - **Journal de caisse** : il montre les encaissements par période et par mode, le total du jour et la clôture par caissier. Il est imprimable.
-- **Annulation** (erreur de saisie) : réservée au Préfet, au Directeur et à l'Administrateur, avec un motif obligatoire. Le reçu reste visible, barré « Annulé ». Le montant est retiré du solde de l'élève et des totaux, et le tuteur est prévenu par SMS.
+- **Annulation** (erreur de saisie) : réservée au Comptable et à l'Administrateur, avec un motif obligatoire. Le reçu reste visible, barré « Annulé ». Le montant est retiré du solde de l'élève et des totaux, et le tuteur est prévenu par SMS.
 
 ### Gestion administrative (onglets Élèves, Classes & personnel, Frais)
 
@@ -375,7 +389,7 @@ Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et 
   « Vérifier le fichier » fait une simulation (`dryRun`) qui liste les erreurs ligne par ligne : téléphone invalide, sexe inconnu, matricule en double ou déjà pris. L'import réel est transactionnel : tout le fichier passe, ou rien n'est écrit.
 - **Désinscription** plutôt que suppression : l'élève disparaît des listes d'appel et des statistiques, mais son historique (présences, cotes, paiements) est conservé.
 - **Personnel** : choisissez le rôle (Préfet, Directeur, D.E., D.D., Comptable, Enseignant) et le bureau. Un compte enseignant créé ici peut se connecter immédiatement sur l'application mobile. Il retrouve ses classes après « Recharger ». Désactiver un enseignant bloque sa connexion et laisse ses classes « sans titulaire ».
-- **Frais** (Préfet, Directeur, Administrateur ; le Comptable les consulte seulement) : la création groupée ne facture jamais deux fois le même libellé à un élève. Une remise ou un report d'échéance recalcule le statut Soldé / En cours / Insolvable.
+- **Frais** (Comptable et Administrateur ; la Direction les suit en pourcentage) : la création groupée ne facture jamais deux fois le même libellé à un élève. Une remise ou un report d'échéance recalcule le statut Soldé / En cours / Insolvable.
 - Les boutons d'action n'apparaissent que si le rôle connecté en a le droit (voir 2bis). L'API applique les mêmes règles.
 
 ---

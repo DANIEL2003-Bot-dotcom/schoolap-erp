@@ -8,6 +8,7 @@ import { PASSWORDS, buildApp, createPrisma, resetDatabase } from './helpers.js';
 const prisma = createPrisma();
 let ctx;
 let director;
+let bursar;
 
 async function login(phone, password) {
   const res = await request(ctx.app).post('/api/auth/login').send({ phone, password });
@@ -24,6 +25,7 @@ beforeEach(async () => {
   await resetDatabase(prisma);
   ctx = buildApp(prisma);
   director = await login(SEED_USERS.director.phone, PASSWORDS.director);
+  bursar = await login(SEED_USERS.bursar.phone, PASSWORDS.bursar);
 });
 
 describe('Référentiel', () => {
@@ -31,7 +33,8 @@ describe('Référentiel', () => {
     const res = await api('get', '/api/admin/overview');
     assert.equal(res.status, 200);
     assert.equal(res.body.classes.length, 3);
-    assert.equal(res.body.staff.length, 4); // Directeur, 2 enseignants, Comptable
+    assert.equal(res.body.staff.length, 5); // Directeur, 2 enseignants, Comptable, Administrateur
+    assert.equal(res.body.settings.eligibilityThreshold, 50);
     assert.equal(res.body.subjects.length, 6);
     const h3c = res.body.classes.find((c) => c.name === '3e Humanités Commerciale');
     assert.equal(h3c.teacherName, SEED_USERS.teacher2.fullName);
@@ -141,7 +144,10 @@ describe('Élèves', () => {
     const all = await api('get', '/api/admin/students?pageSize=10');
     assert.equal(all.body.total, 42);
     assert.equal(all.body.students.length, 10);
-    assert.ok(all.body.students.every((s) => typeof s.outstanding === 'number'));
+    // La direction ne voit pas de montant, seulement le statut « en ordre » et le pourcentage payé.
+    assert.ok(all.body.students.every((s) => s.outstanding === undefined && typeof s.feeStanding.eligible === 'boolean'));
+    const forBursar = await api('get', '/api/admin/students?pageSize=10', bursar);
+    assert.ok(forBursar.body.students.every((s) => typeof s.outstanding === 'number'));
 
     const h3c = await classByName('3e Humanités Commerciale');
     const inClass = await api('get', `/api/admin/students?classId=${h3c.id}`);
@@ -162,13 +168,28 @@ describe('Élèves', () => {
     assert.equal(unchanged.guardianName, target.guardianName, 'un PATCH partiel ne doit pas effacer les autres champs');
   });
 
-  test('fiche élève : frais, transactions, assiduité', async () => {
+  test('fiche élève : frais en pourcentage pour la direction, montants et paiements pour la comptabilité', async () => {
     const s = await prisma.student.findFirstOrThrow({ where: { transactions: { some: {} } } });
     const res = await api('get', `/api/admin/students/${s.id}`);
     assert.equal(res.status, 200);
     assert.equal(res.body.fees.length, 3);
-    assert.ok(res.body.transactions.length >= 1);
+    assert.equal(res.body.amountsVisible, false);
+    assert.equal(res.body.transactions, null);
+    for (const f of res.body.fees) {
+      assert.equal(f.amountDue, undefined);
+      assert.equal(f.amountPaid, undefined);
+      assert.equal(f.remaining, undefined);
+      assert.ok(f.paidPercent === null || (f.paidPercent >= 0 && f.paidPercent <= 100));
+    }
+    assert.equal(typeof res.body.feeStanding.eligible, 'boolean');
+    assert.equal(res.body.feeStanding.threshold, 50);
     assert.ok(res.body.attendance.present + res.body.attendance.absent >= 5);
+    assert.doesNotMatch(JSON.stringify(res.body), /"amount(Due|Paid)?"|"remaining"|"outstanding"/);
+
+    const compta = await api('get', `/api/admin/students/${s.id}`, bursar);
+    assert.equal(compta.body.amountsVisible, true);
+    assert.ok(compta.body.transactions.length >= 1);
+    assert.equal(typeof compta.body.fees[0].amountDue, 'number');
   });
 
   test('import CSV : simulation, erreurs par ligne (rien importé), import réel avec frais', async () => {
@@ -215,17 +236,28 @@ describe('Frais', () => {
   test('création groupée idempotente et synthèse par frais', async () => {
     const classes = await prisma.class.findMany({ where: { name: { contains: 'Humanités' } } });
     const body = { classIds: classes.map((c) => c.id), feeType: 'FRAIS_EXAMEN', label: 'Frais d’examen d’État (TENASOSP)', amountDue: 15, dueDate: '2027-03-31' };
-    const first = await api('post', '/api/admin/fees/bulk').send(body);
+    assert.equal((await api('post', '/api/admin/fees/bulk').send(body)).status, 403, 'la direction ne crée plus de frais');
+    const first = await api('post', '/api/admin/fees/bulk', bursar).send(body);
     assert.equal(first.status, 201, JSON.stringify(first.body));
     assert.equal(first.body.created, 28);
-    const second = await api('post', '/api/admin/fees/bulk').send(body);
+    const second = await api('post', '/api/admin/fees/bulk', bursar).send(body);
     assert.equal(second.body.created, 0);
     assert.equal(second.body.skipped, 28);
 
-    const summary = await api('get', '/api/admin/fees/summary');
+    const summary = await api('get', '/api/admin/fees/summary', bursar);
     const plan = summary.body.plans.find((p) => p.label === body.label);
     assert.equal(plan.students, 28);
     assert.equal(plan.due, 420);
+    // Même synthèse côté direction : pourcentages et effectifs, sans montant.
+    const dirPlan = (await api('get', '/api/admin/fees/summary')).body.plans.find((p) => p.label === body.label);
+    assert.equal(dirPlan.students, 28);
+    assert.equal(dirPlan.due, undefined);
+    assert.equal(dirPlan.paid, undefined);
+    assert.equal(dirPlan.recoveryRate, 0);
+    const dirTotals = (await api('get', '/api/admin/fees/summary')).body.totals;
+    assert.deepEqual(Object.keys(dirTotals[0]).sort(), ['currency', 'recoveryRate']);
+    const usd = summary.body.totals.find((t) => t.currency === 'USD');
+    assert.equal(dirTotals.find((t) => t.currency === 'USD').recoveryRate, usd.paid / usd.due);
     assert.equal(plan.enCours, 28);
     const t1 = summary.body.plans.find((p) => p.label === 'Frais scolaires T1');
     assert.equal(t1.solde + t1.enCours + t1.insolvable, t1.students);
@@ -233,18 +265,19 @@ describe('Frais', () => {
 
   test('remise : montant dû ramené au payé → SOLDÉ ; jamais sous le payé', async () => {
     const fee = await prisma.schoolFee.findFirstOrThrow({ where: { status: 'INSOLVABLE', amountPaid: { gt: 0 } } });
-    const tooLow = await api('patch', `/api/admin/fees/${fee.id}`).send({ amountDue: Number(fee.amountPaid) - 1 });
+    assert.equal((await api('patch', `/api/admin/fees/${fee.id}`).send({ amountDue: Number(fee.amountPaid) })).status, 403, 'remise refusée à la direction');
+    const tooLow = await api('patch', `/api/admin/fees/${fee.id}`, bursar).send({ amountDue: Number(fee.amountPaid) - 1 });
     assert.equal(tooLow.status, 400);
-    const ok = await api('patch', `/api/admin/fees/${fee.id}`).send({ amountDue: Number(fee.amountPaid) });
+    const ok = await api('patch', `/api/admin/fees/${fee.id}`, bursar).send({ amountDue: Number(fee.amountPaid) });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.fee.status, 'SOLDE');
 
     const other = await prisma.schoolFee.findFirstOrThrow({ where: { status: 'INSOLVABLE', id: { not: fee.id } } });
-    const postponed = await api('patch', `/api/admin/fees/${other.id}`).send({ dueDate: '2027-06-30' });
+    const postponed = await api('patch', `/api/admin/fees/${other.id}`, bursar).send({ dueDate: '2027-06-30' });
     assert.equal(postponed.body.fee.status, 'EN_COURS');
   });
 
-  test('économat : inscrit des élèves et consulte les frais, mais ne les crée pas et ne touche pas aux classes', async () => {
+  test('économat : inscrit des élèves et gère les frais, mais ne touche pas aux classes ni au personnel', async () => {
     await api('post', '/api/admin/users').send({ fullName: 'Kasoki Neema', phone: '0850000077', role: 'BURSAR', password: 'Economat2026' }).expect(201);
     const bursar = await login('0850000077', 'Economat2026');
     const cls = await classByName('5e Primaire A');
@@ -254,6 +287,112 @@ describe('Frais', () => {
     assert.equal((await api('post', '/api/admin/users', bursar).send({ fullName: 'X', phone: '0850000078', role: 'TEACHER', password: 'Economat2026' })).status, 403);
     assert.equal((await api('get', '/api/admin/fees/summary', bursar)).status, 200);
     const bulk = { classIds: [cls.id], feeType: 'AUTRE', label: 'Sortie', amountDue: 5, currency: 'USD', dueDate: '2027-02-01' };
-    assert.equal((await api('post', '/api/admin/fees/bulk', bursar).send(bulk)).status, 403);
+    assert.equal((await api('post', '/api/admin/fees/bulk', bursar).send(bulk)).status, 201);
+  });
+});
+
+describe('En ordre avec les frais (autorisation de suivre les cours)', () => {
+  /** Calcul de référence, directement en base : % payé des frais échus, devise la moins payée. */
+  async function expectedStatuses(threshold) {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Lubumbashi' });
+    const fees = await prisma.schoolFee.findMany({ where: { dueDate: { lte: new Date(`${today}T00:00:00Z`) }, student: { isActive: true } } });
+    const students = await prisma.student.findMany({ where: { isActive: true }, select: { id: true } });
+    const out = new Map();
+    for (const st of students) {
+      const mine = fees.filter((f) => f.studentId === st.id);
+      const byCur = new Map();
+      for (const f of mine) {
+        const c = byCur.get(f.currency) ?? { due: 0, paid: 0 };
+        c.due += Number(f.amountDue);
+        c.paid += Number(f.amountPaid);
+        byCur.set(f.currency, c);
+      }
+      const rates = [...byCur.values()].filter((c) => c.due > 0).map((c) => c.paid / c.due);
+      const rate = rates.length ? Math.min(...rates) : null;
+      out.set(st.id, rate === null || rate * 100 >= threshold);
+    }
+    return out;
+  }
+
+  test('tableau de bord : effectifs en ordre / pas en ordre conformes à la base, sans montant pour la direction', async () => {
+    const expected = await expectedStatuses(50);
+    const res = await api('get', '/api/dashboard/summary');
+    assert.equal(res.status, 200);
+    const fs = res.body.feeStanding;
+    assert.equal(fs.threshold, 50);
+    assert.equal(fs.totalStudents, 42);
+    assert.equal(fs.notEligibleCount, [...expected.values()].filter((v) => !v).length);
+    assert.ok(fs.notEligibleCount > 0, 'le seed doit contenir des élèves pas en ordre');
+    assert.equal(fs.classes.reduce((n, c) => n + c.notEligible, 0), fs.notEligibleCount);
+    for (const row of fs.notEligible) {
+      assert.equal(expected.get(row.studentId), false);
+      assert.ok(row.paidPercent < 50);
+    }
+    // Aucun montant pour la direction : ni insolvables détaillés, ni totaux en devises.
+    assert.equal(res.body.access.amounts, false);
+    assert.equal(res.body.insolvents, null);
+    assert.equal(res.body.cash, null);
+    for (const f of res.body.finance) assert.deepEqual(Object.keys(f).sort(), ['currency', 'recoveryRate']);
+
+    const compta = await api('get', '/api/dashboard/summary', bursar);
+    assert.equal(compta.body.access.amounts, true);
+    assert.ok(Array.isArray(compta.body.insolvents));
+    assert.equal(typeof compta.body.finance[0].due, 'number');
+  });
+
+  test('seuil réglé par l’administrateur seul ; filtre de la liste des élèves', async () => {
+    const admin = await login(SEED_USERS.admin.phone, PASSWORDS.admin);
+    assert.equal((await api('patch', '/api/admin/settings').send({ eligibilityThreshold: 80 })).status, 403);
+    assert.equal((await api('patch', '/api/admin/settings', bursar).send({ eligibilityThreshold: 80 })).status, 403);
+    assert.equal((await api('patch', '/api/admin/settings', admin).send({ eligibilityThreshold: 101 })).status, 400);
+    assert.equal((await api('patch', '/api/admin/settings', admin).send({ eligibilityThreshold: 12.5 })).status, 400);
+    const ok = await api('patch', '/api/admin/settings', admin).send({ eligibilityThreshold: 80 });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.settings.eligibilityThreshold, 80);
+
+    const expected = await expectedStatuses(80);
+    const notOk = [...expected.values()].filter((v) => !v).length;
+    const list = await api('get', '/api/admin/students?standing=not_eligible&pageSize=200');
+    assert.equal(list.body.total, notOk);
+    assert.ok(list.body.students.every((s) => s.feeStanding.eligible === false && expected.get(s.id) === false));
+    const okList = await api('get', '/api/admin/students?standing=eligible&pageSize=5&page=2');
+    assert.equal(okList.body.total, 42 - notOk);
+    assert.ok(okList.body.students.every((s) => s.feeStanding.eligible));
+
+    // Seuil 0 % : tout le monde est en ordre.
+    await api('patch', '/api/admin/settings', admin).send({ eligibilityThreshold: 0 }).expect(200);
+    assert.equal((await api('get', '/api/dashboard/summary')).body.feeStanding.notEligibleCount, 0);
+  });
+
+  test('un paiement remet l’élève en ordre ; l’enseignant voit le statut sans montant', async () => {
+    const fee = await prisma.schoolFee.findFirstOrThrow({
+      where: { status: 'INSOLVABLE', amountPaid: 0, student: { class: { name: '5e Primaire A' } } },
+      include: { student: true },
+    });
+    const teacher = await login(SEED_USERS.teacher1.phone, PASSWORDS.teacher);
+    const feeOkOf = async () => {
+      const boot = await api('get', '/api/teacher/bootstrap', teacher);
+      assert.equal(boot.status, 200);
+      assert.doesNotMatch(JSON.stringify(boot.body.classes), /amount|paidPercent|outstanding/);
+      return boot.body.classes.flatMap((c) => c.students).find((s) => s.id === fee.studentId).feeOk;
+    };
+    assert.equal(await feeOkOf(), false);
+
+    // La comptabilité solde tous les frais échus de l'élève.
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Lubumbashi' });
+    const due = await prisma.schoolFee.findMany({ where: { studentId: fee.studentId, dueDate: { lte: new Date(`${today}T00:00:00Z`) }, status: { not: 'SOLDE' } } });
+    for (const f of due) {
+      const res = await api('post', '/api/finance/payments', bursar).send({
+        clientRequestId: crypto.randomUUID(),
+        schoolFeeId: f.id,
+        amount: Number(f.amountDue) - Number(f.amountPaid),
+        method: 'CASH',
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+    }
+    assert.equal(await feeOkOf(), true);
+    const detail = await api('get', `/api/admin/students/${fee.studentId}`);
+    assert.equal(detail.body.feeStanding.eligible, true);
+    assert.equal(detail.body.feeStanding.paidPercent, 100);
   });
 });

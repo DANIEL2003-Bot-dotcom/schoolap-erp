@@ -4,7 +4,7 @@ import { can } from './roles.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
-export function createDashboardService({ prisma, fees, performance = null, finance: cashbook = null, timezone = 'Africa/Lubumbashi' }) {
+export function createDashboardService({ prisma, fees, performance = null, finance: cashbook = null, eligibility = null, timezone = 'Africa/Lubumbashi' }) {
   return {
     async summary(user, dateIso) {
       await fees.refreshStatuses();
@@ -15,9 +15,11 @@ export function createDashboardService({ prisma, fees, performance = null, finan
       // La comptabilité n'a pas accès à la vie scolaire (présences, résultats) : accueil 100 % finances.
       const academic = can(user.role, 'VIEW_ACADEMIC');
       const cashier = can(user.role, 'COLLECT_PAYMENTS');
+      // Montants (dû, payé, reste, caisse) : Comptable et Administrateur uniquement. Les autres voient des pourcentages.
+      const amounts = can(user.role, 'VIEW_AMOUNTS');
       const none = Promise.resolve(null);
 
-      const [school, classes, groups, absents, feeTotals, insolvents, smsToday, performanceAlerts, cash] = await Promise.all([
+      const [school, classes, groups, absents, feeTotals, insolvents, smsToday, performanceAlerts, cash, feeStanding] = await Promise.all([
         prisma.school.findUnique({ where: { id: schoolId } }),
         prisma.class.findMany({
           where: { schoolId },
@@ -53,7 +55,7 @@ export function createDashboardService({ prisma, fees, performance = null, finan
           where: { schoolYear, dueDate: { lte: date }, student: { schoolId, isActive: true } },
           _sum: { amountDue: true, amountPaid: true },
         }),
-        prisma.schoolFee.findMany({
+        !amounts ? Promise.resolve(null) : prisma.schoolFee.findMany({
           where: { status: 'INSOLVABLE', student: { schoolId, isActive: true } },
           orderBy: [{ dueDate: 'asc' }, { student: { lastName: 'asc' } }],
           select: {
@@ -81,6 +83,7 @@ export function createDashboardService({ prisma, fees, performance = null, finan
         prisma.smsLog.count({ where: { student: { schoolId }, createdAt: { gte: dayRange.start, lt: dayRange.end } } }),
         !academic ? none : performance ? performance.schoolOverview(user) : Promise.resolve({ openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] }),
         cashier && cashbook ? cashbook.daySummary(user, dateIso) : none,
+        eligibility ? eligibility.schoolOverview(user, dateIso) : none,
       ]);
 
       const perClass = new Map(classes.map((c) => [c.id, { present: 0, absent: 0 }]));
@@ -108,7 +111,8 @@ export function createDashboardService({ prisma, fees, performance = null, finan
       const finance = feeTotals.map((f) => {
         const due = Number(f._sum.amountDue ?? 0);
         const paid = Number(f._sum.amountPaid ?? 0);
-        return { currency: f.currency, due: round2(due), paid: round2(paid), outstanding: round2(due - paid), recoveryRate: due > 0 ? paid / due : null };
+        const recoveryRate = due > 0 ? paid / due : null;
+        return amounts ? { currency: f.currency, due: round2(due), paid: round2(paid), outstanding: round2(due - paid), recoveryRate } : { currency: f.currency, recoveryRate };
       });
 
       return {
@@ -116,7 +120,7 @@ export function createDashboardService({ prisma, fees, performance = null, finan
         generatedAt: new Date().toISOString(),
         school: { name: school.name, city: school.city, province: school.province, epstCode: school.epstCode },
         schoolYear,
-        access: { academic, cashier },
+        access: { academic, cashier, amounts },
         cash,
         attendance: !academic ? null : {
           enrolled,
@@ -128,6 +132,7 @@ export function createDashboardService({ prisma, fees, performance = null, finan
           classes: classRows,
         },
         finance,
+        feeStanding,
         smsSentToday: academic ? smsToday : null,
         performanceAlerts,
         absents: absents.map((a) => ({
@@ -140,7 +145,7 @@ export function createDashboardService({ prisma, fees, performance = null, finan
           smsSent: Boolean(a.smsAlertSentAt),
           smsSentAt: a.smsAlertSentAt?.toISOString() ?? null,
         })),
-        insolvents: insolvents.map((f) => ({
+        insolvents: insolvents === null ? null : insolvents.map((f) => ({
           feeId: f.id,
           studentId: f.student.id,
           matricule: f.student.matricule,

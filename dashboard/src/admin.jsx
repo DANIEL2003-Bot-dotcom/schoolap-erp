@@ -4,6 +4,7 @@ import { StudentPerformance } from './performance.jsx';
 import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, formatPhone, formatShortDate, isStrongPassword, normalizePhone, todayIso } from './lib.js';
 import { Field, Modal, PasswordInput, fieldErrors, useAsync } from './ui.jsx';
 import { useIsMobile } from './mobile.jsx';
+import { PaidPercent, StandingBadge, StandingBanner, ThresholdSetting } from './standing.jsx';
 
 /* =============================================================================
    Gestion administrative — structure EPST
@@ -13,7 +14,10 @@ import { useIsMobile } from './mobile.jsx';
    - Classes & personnel : classes et titulaires, bureaux (Direction, Études,
      Discipline, Comptabilité, Salle des profs), comptes du personnel, matières
    - Frais : synthèse par frais, création groupée par classe, remise / report
-     (direction uniquement : le comptable consulte et encaisse, il ne fixe pas les montants)
+     (Comptable et Administrateur uniquement)
+   - Montants visibles par le Comptable et l'Administrateur seulement : les autres
+     rôles voient des pourcentages et le statut « En ordre / Pas en ordre »
+     (seuil réglé par l'Administrateur, voir standing.jsx)
    - Caisse : encaissements manuels, reçus imprimables, journal (voir finance.jsx)
    ============================================================================= */
 
@@ -118,6 +122,7 @@ function createAdminApi(token, onSlow) {
     feeSummary: () => call('/fees/summary'),
     bulkFees: (b) => call('/fees/bulk', 'POST', b),
     updateFee: (id, b) => call(`/fees/${id}`, 'PATCH', b),
+    updateSettings: (b) => call('/settings', 'PATCH', b),
   };
 }
 
@@ -256,6 +261,28 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
   );
 }
 
+/** Ligne de frais sans montant (Direction, vie scolaire) : échéance, pourcentage payé et statut. */
+function FeePercentRow({ fee }) {
+  const st = FEE_STATUS[fee.status];
+  return (
+    <tr>
+      <td data-label="Frais" className="full">
+        <div className="student">
+          <b>{fee.label}</b>
+          <small>{fee.schoolYear}</small>
+        </div>
+      </td>
+      <td data-label="Échéance">{formatShortDate(fee.dueDate)}</td>
+      <td data-label="Payé">
+        <PaidPercent percent={fee.paidPercent} />
+      </td>
+      <td data-label="Statut">
+        <span className={`badge ${st.cls}`}>{st.label}</span>
+      </td>
+    </tr>
+  );
+}
+
 function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit, onCollect }) {
   const [editing, setEditing] = useState(false);
   const [amountDue, setAmountDue] = useState(String(fee.amountDue));
@@ -345,9 +372,11 @@ function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFee
   useEffect(load, [load]);
 
   const s = data?.student;
+  const amounts = Boolean(data?.amountsVisible);
   const totals = useMemo(() => {
     const t = {};
-    for (const f of data?.fees ?? []) {
+    if (!data?.amountsVisible) return t;
+    for (const f of data.fees) {
       t[f.currency] ??= { due: 0, paid: 0 };
       t[f.currency].due += f.amountDue;
       t[f.currency].paid += f.amountPaid;
@@ -389,6 +418,7 @@ function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFee
             </span>
             {!s.isActive && <span className="badge badge-red">Désinscrit</span>}
           </div>
+          <StandingBanner standing={data.feeStanding} />
           <div className="stat-row">
             {data.attendance && (
               <div className="stat">
@@ -416,6 +446,22 @@ function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFee
           <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Frais scolaires</h4>
           {data.fees.length === 0 ? (
             <div className="empty">Aucun frais attribué.</div>
+          ) : !amounts ? (
+            <table className="responsive">
+              <thead>
+                <tr>
+                  <th>Frais</th>
+                  <th>Échéance</th>
+                  <th>Payé</th>
+                  <th>Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.fees.map((f) => (
+                  <FeePercentRow key={f.id} fee={f} />
+                ))}
+              </tbody>
+            </table>
           ) : (
             <table className="responsive">
               <thead>
@@ -444,10 +490,18 @@ function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFee
               </tbody>
             </table>
           )}
-          <h4 style={{ margin: '20px 0 8px', color: 'var(--navy-900)' }}>Paiements et reçus</h4>
-          {data.transactions.length === 0 ? (
-            <div className="empty">Aucun paiement.</div>
+          {!amounts ? (
+            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+              Les montants, paiements et reçus sont réservés à la Comptabilité et à l’Administrateur.
+            </p>
+          ) : data.transactions.length === 0 ? (
+            <>
+              <h4 style={{ margin: '20px 0 8px', color: 'var(--navy-900)' }}>Paiements et reçus</h4>
+              <div className="empty">Aucun paiement.</div>
+            </>
           ) : (
+            <>
+            <h4 style={{ margin: '20px 0 8px', color: 'var(--navy-900)' }}>Paiements et reçus</h4>
             <table className="responsive">
               <thead>
                 <tr>
@@ -497,6 +551,7 @@ function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFee
                 ))}
               </tbody>
             </table>
+            </>
           )}
           {collectFee && financeApi && (
             <CollectModal
@@ -675,7 +730,7 @@ function fieldErrorsList(err) {
 }
 
 function StudentsTab({ api, financeApi, refData, perms, notify, onLogout }) {
-  const [filters, setFilters] = useState({ classId: '', q: '', status: 'active', page: 1 });
+  const [filters, setFilters] = useState({ classId: '', q: '', status: 'active', standing: 'all', page: 1 });
   const [query, setQuery] = useState('');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -745,6 +800,11 @@ function StudentsTab({ api, financeApi, refData, perms, notify, onLogout }) {
               <option value="inactive">Désinscrits</option>
               <option value="all">Tous</option>
             </select>
+            <select aria-label="Situation des frais" value={filters.standing} onChange={(e) => setFilters((f) => ({ ...f, standing: e.target.value, page: 1 }))}>
+              <option value="all">Frais : tous</option>
+              <option value="eligible">En ordre</option>
+              <option value="not_eligible">Pas en ordre</option>
+            </select>
             <input className="search" type="search" placeholder="Nom, matricule, téléphone…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Rechercher" />
           </div>
         </div>
@@ -770,7 +830,8 @@ function StudentsTab({ api, financeApi, refData, perms, notify, onLogout }) {
                 <th>Élève</th>
                 <th>Classe</th>
                 <th>Tuteur</th>
-                <th className="num">Reste à payer</th>
+                <th>Frais</th>
+                {perms.amounts && <th className="num">Reste à payer</th>}
                 <th />
               </tr>
             </thead>
@@ -803,9 +864,14 @@ function StudentsTab({ api, financeApi, refData, perms, notify, onLogout }) {
                       <small>{s.guardianName ?? ''}</small>
                     </div>
                   </td>
-                  <td data-label="Reste à payer" className="num c-end">
-                    {s.outstanding > 0 ? <span className="remaining">{formatMoney(s.outstanding)}</span> : <span className="badge badge-sms">Soldé</span>}
+                  <td data-label="Frais" className={perms.amounts ? 'hide-sm' : 'c-end'}>
+                    <StandingBadge standing={s.feeStanding} showPercent={!perms.amounts} />
                   </td>
+                  {perms.amounts && (
+                    <td data-label="Reste à payer" className="num c-end">
+                      {s.outstanding > 0 ? <span className="remaining">{formatMoney(s.outstanding)}</span> : <span className="badge badge-sms">Soldé</span>}
+                    </td>
+                  )}
                   <td data-label="" className="full hide-sm">
                     <div className="actions">
                       <button className="btn btn-ghost btn-sm" onClick={() => setModal({ type: 'detail', student: s })}>
@@ -1426,15 +1492,20 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
   }, [api, onLogout]);
   useEffect(load, [load]);
 
-  const totals = useMemo(() => {
-    const t = {};
-    for (const p of data?.plans ?? []) {
-      t[p.currency] ??= { due: 0, paid: 0 };
-      t[p.currency].due += p.due;
-      t[p.currency].paid += p.paid;
+  const amounts = Boolean(data?.amountsVisible);
+  // Recouvrement par devise calculé par l'API : montants pour la comptabilité, pourcentage seul pour les autres.
+  const totals = data?.totals ?? [];
+
+  async function saveThreshold(value) {
+    try {
+      const res = await api.updateSettings({ eligibilityThreshold: value });
+      notify({ text: `Seuil « en ordre » fixé à ${res.settings.eligibilityThreshold} % des frais échus.` });
+      refData.reload();
+    } catch (err) {
+      if (err.status === 401) onLogout('Votre session a expiré. Reconnectez-vous.');
+      else notify({ error: true, text: err.message });
     }
-    return t;
-  }, [data]);
+  }
 
   return (
     <>
@@ -1443,7 +1514,7 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
           <h1>Frais scolaires</h1>
           <div className="muted">
             Année {data?.schoolYear ?? '…'} · élèves inscrits uniquement ·{' '}
-            {perms.fees ? 'remises et reports depuis la fiche de l’élève' : 'consultation : les montants sont fixés par la direction, encaissez depuis l’onglet Caisse'}
+            {perms.fees ? 'remises et reports depuis la fiche de l’élève' : 'consultation en pourcentages : les montants sont réservés à la Comptabilité et à l’Administrateur'}
           </div>
         </div>
         {perms.fees && (
@@ -1454,15 +1525,15 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
       </div>
 
       <div className="kpis fees-kpis">
-        {Object.entries(totals).map(([cur, t]) => (
-          <div className="kpi green" key={cur}>
-            <span className="kpi-label">Recouvrement {cur}</span>
-            <span className="kpi-value">{formatPct(t.due ? t.paid / t.due : null)}</span>
+        {totals.map((t) => (
+          <div className="kpi green" key={t.currency}>
+            <span className="kpi-label">Recouvrement {t.currency}</span>
+            <span className="kpi-value">{formatPct(t.recoveryRate)}</span>
             <div className="bar green">
-              <span style={{ width: `${t.due ? Math.min(100, (t.paid / t.due) * 100) : 0}%` }} />
+              <span style={{ width: `${Math.min(100, (t.recoveryRate ?? 0) * 100)}%` }} />
             </div>
             <span className="kpi-foot">
-              {formatMoney(t.paid, cur)} encaissés sur {formatMoney(t.due, cur)}
+              {amounts ? `${formatMoney(t.paid, t.currency)} encaissés sur ${formatMoney(t.due, t.currency)}` : 'Part des frais de l’année déjà payée'}
             </span>
           </div>
         ))}
@@ -1480,6 +1551,7 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
           <h2>Synthèse par frais</h2>
           {data && <span className="count">{data.plans.length}</span>}
         </div>
+        <ThresholdSetting key={refData.settings?.eligibilityThreshold} value={refData.settings?.eligibilityThreshold ?? 50} canEdit={perms.settings} onSave={saveThreshold} />
         {error && (
           <div className="card-body">
             <div className="alert alert-error">{error}</div>
@@ -1502,8 +1574,8 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
                 <th>Frais</th>
                 <th>Échéance</th>
                 <th className="num">Élèves</th>
-                <th className="num">Attendu</th>
-                <th className="num">Encaissé</th>
+                {amounts && <th className="num">Attendu</th>}
+                {amounts && <th className="num">Encaissé</th>}
                 <th style={{ minWidth: 140 }}>Recouvrement</th>
                 <th>Statuts</th>
               </tr>
@@ -1521,12 +1593,16 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
                   <td data-label="Élèves" className="num">
                     {p.students}
                   </td>
-                  <td data-label="Attendu" className="num">
-                    {formatMoney(p.due, p.currency)}
-                  </td>
-                  <td data-label="Encaissé" className="num">
-                    {formatMoney(p.paid, p.currency)}
-                  </td>
+                  {amounts && (
+                    <td data-label="Attendu" className="num">
+                      {formatMoney(p.due, p.currency)}
+                    </td>
+                  )}
+                  {amounts && (
+                    <td data-label="Encaissé" className="num">
+                      {formatMoney(p.paid, p.currency)}
+                    </td>
+                  )}
                   <td data-label="Recouvrement">
                     <div style={{ display: 'grid', gap: 4 }}>
                       <small>{formatPct(p.recoveryRate)}</small>
@@ -1587,6 +1663,8 @@ export function AdminView({ tab, session, notify, onLogout, onSlow }) {
     fees: can(session.user, 'MANAGE_FEES'),
     collect: can(session.user, 'COLLECT_PAYMENTS'),
     viewAcademic: can(session.user, 'VIEW_ACADEMIC'),
+    amounts: can(session.user, 'VIEW_AMOUNTS'),
+    settings: can(session.user, 'MANAGE_SETTINGS'),
   };
 
   const reload = useCallback(() => {

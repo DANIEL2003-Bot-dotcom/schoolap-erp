@@ -35,11 +35,15 @@ export const PERMISSIONS = {
   MANAGE_ACADEMIC: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES'],
   /** Inscriptions, transferts, désinscriptions, import CSV. */
   MANAGE_STUDENTS: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'BURSAR'],
-  /** Créer et modifier les frais (montant, remise, échéance) et annuler un reçu. Le comptable en est exclu : il encaisse, il ne fixe pas les montants. */
-  MANAGE_FEES: ['ADMIN', 'PREFET', 'DIRECTOR'],
+  /** Créer et modifier les frais (montant, remise, échéance) et annuler un reçu : Comptable et Administrateur uniquement. */
+  MANAGE_FEES: ['ADMIN', 'BURSAR'],
   /** Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, journal de caisse, relances SMS. */
-  COLLECT_PAYMENTS: ['ADMIN', 'PREFET', 'DIRECTOR', 'BURSAR'],
-  /** Tableau de bord et consultation des listes (élèves, classes, frais). */
+  COLLECT_PAYMENTS: ['ADMIN', 'BURSAR'],
+  /** Voir les MONTANTS (dû, payé, reste, encaissements). Les autres rôles ne voient que des pourcentages et le statut « En ordre / Pas en ordre ». */
+  VIEW_AMOUNTS: ['ADMIN', 'BURSAR'],
+  /** Réglages de l'école, dont le seuil « en ordre » avec les frais. */
+  MANAGE_SETTINGS: ['ADMIN'],
+  /** Tableau de bord et consultation des listes (élèves, classes, frais en pourcentages). */
   VIEW_SCHOOL: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE', 'BURSAR'],
   /** Vie scolaire : présences, résultats, alertes de baisse, liste du personnel. Le comptable ne voit que les finances. */
   VIEW_ACADEMIC: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE'],

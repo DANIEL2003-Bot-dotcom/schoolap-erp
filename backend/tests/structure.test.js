@@ -40,7 +40,7 @@ describe('Bureaux et rôles EPST', () => {
     assert.equal(res.status, 200);
     assert.deepEqual(res.body.offices.map((o) => o.code).sort(), OFFICES.map((o) => o.code).sort());
     const byCode = Object.fromEntries(res.body.offices.map((o) => [o.code, o]));
-    assert.equal(byCode.DIRECTION.members, 1);
+    assert.equal(byCode.DIRECTION.members, 2); // Directeur et Administrateur
     assert.equal(byCode.SALLE_DES_PROFS.members, 2);
     assert.equal(byCode.COMPTABILITE.name, 'Comptabilité / Caisse');
     const directorRow = res.body.staff.find((u) => u.role === 'DIRECTOR');
@@ -103,7 +103,7 @@ describe('Bureaux et rôles EPST', () => {
     assert.equal(dup.status, 409);
   });
 
-  test('permissions : Préfet gère le personnel, D.E. les classes, D.D. consulte et fait l’appel, Comptable encaisse', async () => {
+  test('permissions : Préfet gère le personnel, D.E. les classes, D.D. consulte et fait l’appel, Comptable encaisse et voit seul les montants', async () => {
     const prefet = await createStaff('PREFET', '0970000041');
     const de = await createStaff('DIRECTEUR_ETUDES', '0970000042');
     const dd = await createStaff('DIRECTEUR_DISCIPLINE', '0970000043');
@@ -122,6 +122,13 @@ describe('Bureaux et rôles EPST', () => {
 
     const fee = await prisma.schoolFee.findFirstOrThrow({ where: { status: 'INSOLVABLE' } });
     assert.equal((await api('post', `/api/fees/${fee.id}/remind`, dd)).status, 403);
+    assert.equal((await api('post', `/api/fees/${fee.id}/remind`, prefet)).status, 403);
+    for (const token of [prefet, de, dd]) {
+      const summary = await api('get', '/api/dashboard/summary', token);
+      assert.equal(summary.body.access.amounts, false);
+      assert.equal(summary.body.insolvents, null);
+      assert.equal(typeof summary.body.feeStanding.notEligibleCount, 'number');
+    }
     assert.equal((await api('post', `/api/fees/${fee.id}/remind`, comptable)).status, 200);
 
     const teacher = (await login(SEED_USERS.teacher1.phone, PASSWORDS.teacher)).token;
@@ -144,6 +151,7 @@ describe('Verrouillage de l’API', () => {
       ['post', '/api/finance/payments'],
       ['get', '/api/finance/payments'],
       ['get', '/api/finance/summary'],
+      ['patch', '/api/admin/settings'],
     ];
     for (const [method, path] of routes) {
       const none = await request(ctx.app)[method](path);

@@ -114,6 +114,8 @@ const listStudentsSchema = z.object({
   classId: z.uuid().optional(),
   q: z.string().trim().max(80).optional(),
   status: z.enum(['active', 'inactive', 'all']).default('active'),
+  /** Situation avec les frais : tous, en ordre, pas en ordre. */
+  standing: z.enum(['all', 'eligible', 'not_eligible']).default('all'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -235,8 +237,9 @@ export function parseStudentsCsv(text) {
 }
 
 // ------------------------------------------------------------------ Service
-export function createAdminService({ prisma, config, finance = null }) {
+export function createAdminService({ prisma, config, finance = null, eligibility = null }) {
   const today = () => todayIn(config.timezone);
+  const showAmounts = (user) => can(user.role, 'VIEW_AMOUNTS');
 
   async function getClassOrThrow(user, classId) {
     const cls = await prisma.class.findFirst({ where: { id: classId, schoolId: user.schoolId } });
@@ -328,6 +331,22 @@ export function createAdminService({ prisma, config, finance = null }) {
     lastReminderAt: f.lastReminderAt?.toISOString() ?? null,
   });
 
+  /** Frais sans montant (Direction, vie scolaire) : libellé, échéance, statut et pourcentage payé. */
+  const feeOutPercent = (f) => {
+    const due = Number(f.amountDue);
+    return {
+      id: f.id,
+      schoolYear: f.schoolYear,
+      feeType: f.feeType,
+      label: f.label,
+      paidPercent: due > 0 ? Math.round((Math.min(Number(f.amountPaid), due) / due) * 1000) / 10 : null,
+      dueDate: fromDbDate(f.dueDate),
+      status: f.status,
+    };
+  };
+
+  const standingOut = (st) => (st ? { eligible: st.eligible, paidPercent: st.paidPercent } : { eligible: true, paidPercent: null });
+
   return {
     // =========================================================== Référentiel
     async overview(user) {
@@ -381,6 +400,7 @@ export function createAdminService({ prisma, config, finance = null }) {
         roles: ROLE_CODES.map((code) => ({ code, label: ROLES[code].label, short: ROLES[code].short, defaultOffice: ROLES[code].office })),
         assignableRoles: assignableRoles(user.role),
         subjects: subjects.map((s) => ({ id: s.id, name: s.name, defaultMaxScore: Number(s.defaultMaxScore) })),
+        settings: { eligibilityThreshold: eligibility ? await eligibility.thresholdOf(user.schoolId) : 50 },
       };
     },
 
@@ -553,28 +573,46 @@ export function createAdminService({ prisma, config, finance = null }) {
             }
           : {}),
       };
-      const [total, rows] = await Promise.all([
-        prisma.student.count({ where }),
-        prisma.student.findMany({
-          where,
-          orderBy: [{ lastName: 'asc' }, { middleName: 'asc' }, { firstName: 'asc' }],
-          skip: (q.page - 1) * q.pageSize,
-          take: q.pageSize,
-          include: { class: { select: { name: true } } },
-        }),
-      ]);
-      // Solde restant dû par élève (année en cours), pour la colonne « Reste à payer »
-      const balances = await prisma.schoolFee.groupBy({
-        by: ['studentId'],
-        where: { studentId: { in: rows.map((r) => r.id) }, schoolYear: schoolYearOf(today()) },
-        _sum: { amountDue: true, amountPaid: true },
-      });
-      const balanceMap = new Map(balances.map((b) => [b.studentId, round2(Number(b._sum.amountDue ?? 0) - Number(b._sum.amountPaid ?? 0))]));
+      const orderBy = [{ lastName: 'asc' }, { middleName: 'asc' }, { firstName: 'asc' }];
+      const include = { class: { select: { name: true } } };
+      let total;
+      let rows;
+      let standing;
+      if (q.standing === 'all' || !eligibility) {
+        [total, rows] = await Promise.all([
+          prisma.student.count({ where }),
+          prisma.student.findMany({ where, orderBy, skip: (q.page - 1) * q.pageSize, take: q.pageSize, include }),
+        ]);
+        standing = eligibility ? (await eligibility.forStudents(user.schoolId, { studentIds: rows.map((r) => r.id) })).statuses : new Map();
+      } else {
+        // Filtre « en ordre / pas en ordre » : statut calculé pour tous les élèves du filtre, puis pagination.
+        const ids = (await prisma.student.findMany({ where, orderBy, select: { id: true } })).map((r) => r.id);
+        standing = (await eligibility.forStudents(user.schoolId, { studentIds: ids })).statuses;
+        const wanted = q.standing === 'eligible';
+        const kept = ids.filter((sid) => standing.get(sid)?.eligible === wanted);
+        total = kept.length;
+        const pageIds = kept.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
+        rows = await prisma.student.findMany({ where: { id: { in: pageIds } }, orderBy, include });
+      }
+      // Solde restant dû par élève (année en cours) : colonne « Reste à payer », pour la comptabilité seulement.
+      let balanceMap = null;
+      if (showAmounts(user)) {
+        const balances = await prisma.schoolFee.groupBy({
+          by: ['studentId'],
+          where: { studentId: { in: rows.map((r) => r.id) }, schoolYear: schoolYearOf(today()) },
+          _sum: { amountDue: true, amountPaid: true },
+        });
+        balanceMap = new Map(balances.map((b) => [b.studentId, round2(Number(b._sum.amountDue ?? 0) - Number(b._sum.amountPaid ?? 0))]));
+      }
       return {
         total,
         page: q.page,
         pageSize: q.pageSize,
-        students: rows.map((s) => ({ ...studentOut(s), outstanding: balanceMap.get(s.id) ?? 0 })),
+        students: rows.map((s) => ({
+          ...studentOut(s),
+          ...(balanceMap ? { outstanding: balanceMap.get(s.id) ?? 0 } : {}),
+          feeStanding: standingOut(standing.get(s.id)),
+        })),
       };
     },
 
@@ -601,11 +639,16 @@ export function createAdminService({ prisma, config, finance = null }) {
         ]);
         attendance = { present, absent, rate: present + absent > 0 ? present / (present + absent) : null };
       }
+      const amounts = showAmounts(user);
+      const feeStanding = eligibility ? await eligibility.forStudent(user.schoolId, studentId) : null;
       return {
         student: studentOut(s),
         attendance,
-        fees: s.fees.map(feeOut),
-        transactions: s.transactions.map((t) => ({
+        feeStanding: feeStanding && { eligible: feeStanding.eligible, paidPercent: feeStanding.paidPercent, threshold: feeStanding.threshold, exigibleFees: feeStanding.exigibleFees },
+        amountsVisible: amounts,
+        fees: s.fees.map(amounts ? feeOut : feeOutPercent),
+        // Paiements et reçus (montants) : comptabilité et administration uniquement.
+        transactions: !amounts ? null : s.transactions.map((t) => ({
           ...(finance ? finance.paymentRow(t) : {}),
           id: t.id,
           transactionId: t.transactionId,
@@ -721,6 +764,7 @@ export function createAdminService({ prisma, config, finance = null }) {
     // ================================================================ Frais
     async feeSummary(user) {
       const schoolYear = schoolYearOf(today());
+      const amounts = showAmounts(user);
       const groups = await prisma.schoolFee.groupBy({
         by: ['feeType', 'label', 'currency', 'dueDate'],
         where: { schoolYear, student: { schoolId: user.schoolId, isActive: true } },
@@ -739,8 +783,23 @@ export function createAdminService({ prisma, config, finance = null }) {
         const k = key(s);
         byStatus.set(k, { ...(byStatus.get(k) ?? {}), [s.status]: s._count._all });
       }
+      // Recouvrement global par devise (taux pondéré par les montants) : montants pour la comptabilité seulement.
+      const byCurrency = new Map();
+      for (const g of groups) {
+        const t = byCurrency.get(g.currency) ?? { due: 0, paid: 0 };
+        t.due += Number(g._sum.amountDue ?? 0);
+        t.paid += Number(g._sum.amountPaid ?? 0);
+        byCurrency.set(g.currency, t);
+      }
+      const totals = [...byCurrency.entries()].map(([currency, t]) => ({
+        currency,
+        ...(amounts ? { due: round2(t.due), paid: round2(t.paid) } : {}),
+        recoveryRate: t.due > 0 ? t.paid / t.due : null,
+      }));
       return {
         schoolYear,
+        amountsVisible: amounts,
+        totals,
         plans: groups.map((g) => {
           const due = Number(g._sum.amountDue ?? 0);
           const paid = Number(g._sum.amountPaid ?? 0);
@@ -751,8 +810,7 @@ export function createAdminService({ prisma, config, finance = null }) {
             currency: g.currency,
             dueDate: fromDbDate(g.dueDate),
             students: g._count._all,
-            due: round2(due),
-            paid: round2(paid),
+            ...(amounts ? { due: round2(due), paid: round2(paid) } : {}),
             recoveryRate: due > 0 ? paid / due : null,
             solde: st.SOLDE ?? 0,
             enCours: st.EN_COURS ?? 0,
