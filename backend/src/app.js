@@ -5,6 +5,7 @@ import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { adminRouter } from './routes/admin.js';
 import { authRouter } from './routes/auth.js';
 import { dashboardRouters } from './routes/dashboard.js';
+import { financeRouter } from './routes/finance.js';
 import { paymentsRouter } from './routes/payments.js';
 import { syncRouters } from './routes/sync.js';
 import { teacherRouter } from './routes/teacher.js';
@@ -12,6 +13,7 @@ import { createAdminService } from './services/admin.js';
 import { createAttendanceService } from './services/attendance.js';
 import { createDashboardService } from './services/dashboard.js';
 import { createFeesService } from './services/fees.js';
+import { createFinanceService } from './services/finance.js';
 import { createGradesService } from './services/grades.js';
 import { createMobileMoneyService } from './services/mobileMoney.js';
 import { createPerformanceService } from './services/performance.js';
@@ -25,8 +27,9 @@ export function createApp({ prisma, config, overrides = {} }) {
   const performanceService = createPerformanceService({ prisma, sms });
   const gradesService = createGradesService({ prisma, performance: performanceService });
   const mobileMoneyService = createMobileMoneyService({ prisma, sms, config, dispatchWebhook: overrides.dispatchWebhook });
-  const adminService = createAdminService({ prisma, config });
-  const dashboardService = createDashboardService({ prisma, fees: feesService, performance: performanceService, timezone: config.timezone });
+  const financeService = createFinanceService({ prisma, sms, config });
+  const adminService = createAdminService({ prisma, config, finance: financeService });
+  const dashboardService = createDashboardService({ prisma, fees: feesService, performance: performanceService, finance: financeService, timezone: config.timezone });
 
   const app = express();
   app.set('trust proxy', config.trustProxy);
@@ -83,6 +86,7 @@ export function createApp({ prisma, config, overrides = {} }) {
   app.use('/api/attendance', sync.attendance);
   app.use('/api/grades', sync.grades);
   app.use('/api/payments', paymentsRouter({ prisma, config, mobileMoneyService }));
+  app.use('/api/finance', financeRouter({ prisma, config, financeService }));
   app.use('/api/dashboard', admin.dashboard);
   app.use('/api/fees', admin.fees);
   app.use('/api/admin', adminRouter({ prisma, config, adminService, performanceService }));
@@ -90,5 +94,5 @@ export function createApp({ prisma, config, overrides = {} }) {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  return { app, services: { sms, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService } };
+  return { app, services: { sms, financeService, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService } };
 }

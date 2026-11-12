@@ -97,6 +97,16 @@ const ICON_PATHS = {
       <path d="M6.5 15h4" />
     </>
   ),
+  cash: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M7 8h10" />
+      <path d="M7 12h4" />
+      <path d="M7 16h4" />
+      <path d="M15 12v4" />
+      <path d="M13 14h4" />
+    </>
+  ),
   install: (
     <>
       <path d="M12 3v12" />
@@ -130,7 +140,7 @@ export function Icon({ name, size = 22 }) {
 
 /* --------------------------------------------------------- Barre du bas */
 
-/** Navigation principale sur téléphone : 4 onglets toujours visibles, au pouce. */
+/** Navigation principale sur téléphone : 4 ou 5 onglets selon les droits, toujours visibles, au pouce. */
 export function BottomNav({ tabs, current, onSelect }) {
   return (
     <nav className="bottom-nav" aria-label="Navigation principale">

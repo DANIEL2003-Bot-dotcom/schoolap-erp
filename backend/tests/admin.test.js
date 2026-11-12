@@ -31,7 +31,7 @@ describe('Référentiel', () => {
     const res = await api('get', '/api/admin/overview');
     assert.equal(res.status, 200);
     assert.equal(res.body.classes.length, 3);
-    assert.equal(res.body.staff.length, 3);
+    assert.equal(res.body.staff.length, 4); // Directeur, 2 enseignants, Comptable
     assert.equal(res.body.subjects.length, 6);
     const h3c = res.body.classes.find((c) => c.name === '3e Humanités Commerciale');
     assert.equal(h3c.teacherName, SEED_USERS.teacher2.fullName);
@@ -244,7 +244,7 @@ describe('Frais', () => {
     assert.equal(postponed.body.fee.status, 'EN_COURS');
   });
 
-  test('économat : inscrit des élèves et gère les frais, mais pas les classes', async () => {
+  test('économat : inscrit des élèves et consulte les frais, mais ne les crée pas et ne touche pas aux classes', async () => {
     await api('post', '/api/admin/users').send({ fullName: 'Kasoki Neema', phone: '0850000077', role: 'BURSAR', password: 'Economat2026' }).expect(201);
     const bursar = await login('0850000077', 'Economat2026');
     const cls = await classByName('5e Primaire A');
@@ -253,5 +253,7 @@ describe('Frais', () => {
     assert.equal((await api('post', '/api/admin/classes', bursar).send({ level: '1re Primaire' })).status, 403);
     assert.equal((await api('post', '/api/admin/users', bursar).send({ fullName: 'X', phone: '0850000078', role: 'TEACHER', password: 'Economat2026' })).status, 403);
     assert.equal((await api('get', '/api/admin/fees/summary', bursar)).status, 200);
+    const bulk = { classIds: [cls.id], feeType: 'AUTRE', label: 'Sortie', amountDue: 5, currency: 'USD', dueDate: '2027-02-01' };
+    assert.equal((await api('post', '/api/admin/fees/bulk', bursar).send(bulk)).status, 403);
   });
 });

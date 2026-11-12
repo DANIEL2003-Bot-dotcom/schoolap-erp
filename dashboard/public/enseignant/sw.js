@@ -2,7 +2,7 @@
    - Page : réseau d'abord (toujours la dernière version), copie locale si hors ligne
    - Fichiers de l'application (noms versionnés) : copie locale d'abord
    - Appels à l'API : jamais mis en cache (la file d'attente est gérée par l'application) */
-const CACHE = 'schoolap-enseignant-v2';
+const CACHE = 'schoolap-enseignant-v3';
 const SHELL = ['./', './manifest.webmanifest', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
 
 /** Met en cache la page et tous les fichiers qu'elle référence ; retire les anciennes versions. */

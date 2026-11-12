@@ -11,7 +11,7 @@ export const OFFICES = [
   { code: 'DIRECTION', name: 'Direction', description: 'Chef d’établissement, administration générale et relations avec la sous-division EPST.' },
   { code: 'ETUDES', name: 'Études / Préfecture', description: 'Préfet et Directeur des études : programmes, horaires, évaluations, bulletins.' },
   { code: 'DISCIPLINE', name: 'Discipline', description: 'Directeur de discipline : assiduité, retards, sanctions, suivi des élèves.' },
-  { code: 'COMPTABILITE', name: 'Comptabilité / Caisse', description: 'Comptable : frais scolaires, encaissements Mobile Money, relances.' },
+  { code: 'COMPTABILITE', name: 'Comptabilité / Caisse', description: 'Comptable : encaissements (espèces, banque, Mobile Money), reçus, journal de caisse, relances.' },
   { code: 'SALLE_DES_PROFS', name: 'Salle des professeurs', description: 'Enseignants : appel journalier et saisie des cotes.' },
 ];
 export const OFFICE_CODES = OFFICES.map((o) => o.code);
@@ -35,10 +35,14 @@ export const PERMISSIONS = {
   MANAGE_ACADEMIC: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES'],
   /** Inscriptions, transferts, désinscriptions, import CSV. */
   MANAGE_STUDENTS: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'BURSAR'],
-  /** Frais, remises, relances SMS, encaissements Mobile Money. */
-  MANAGE_FEES: ['ADMIN', 'PREFET', 'DIRECTOR', 'BURSAR'],
-  /** Tableau de bord et consultation des listes (élèves, classes, personnel, frais). */
+  /** Créer et modifier les frais (montant, remise, échéance) et annuler un reçu. Le comptable en est exclu : il encaisse, il ne fixe pas les montants. */
+  MANAGE_FEES: ['ADMIN', 'PREFET', 'DIRECTOR'],
+  /** Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, journal de caisse, relances SMS. */
+  COLLECT_PAYMENTS: ['ADMIN', 'PREFET', 'DIRECTOR', 'BURSAR'],
+  /** Tableau de bord et consultation des listes (élèves, classes, frais). */
   VIEW_SCHOOL: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE', 'BURSAR'],
+  /** Vie scolaire : présences, résultats, alertes de baisse, liste du personnel. Le comptable ne voit que les finances. */
+  VIEW_ACADEMIC: ['ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE'],
   /** Application mobile : chargement des classes et appel. */
   TAKE_ATTENDANCE: ['TEACHER', 'ADMIN', 'PREFET', 'DIRECTOR', 'DIRECTEUR_ETUDES', 'DIRECTEUR_DISCIPLINE'],
   /** Application mobile : saisie des cotes. */

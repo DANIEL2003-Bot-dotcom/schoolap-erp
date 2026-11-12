@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-/* Composants partagés : champ mot de passe avec bouton « afficher / masquer ». */
+/* Composants partagés : champ mot de passe, fenêtre modale, champ de formulaire, actions asynchrones. */
 
 export const PASSWORD_CSS = `
 .pwd-wrap{position:relative;display:block}
@@ -50,4 +50,68 @@ export function PasswordInput({ id, value, onChange, autoComplete = 'current-pas
       </button>
     </span>
   );
+}
+
+/** Transforme les détails de validation de l'API en { champ: message }. */
+export function fieldErrors(err) {
+  if (!Array.isArray(err?.details)) return {};
+  return Object.fromEntries(err.details.filter((d) => d.field).map((d) => [d.field, d.message]));
+}
+
+export function Modal({ title, onClose, wide = false, children, footer }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="backdrop" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`modal ${wide ? 'wide' : ''}`}>
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer">
+            ×
+          </button>
+        </div>
+        <div className="modal-body scroll">{children}</div>
+        {footer && <div className="modal-foot">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function Field({ id, label, error, hint, children }) {
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      {children}
+      {error ? <span className="err">{error}</span> : hint ? <span className="hint">{hint}</span> : null}
+    </div>
+  );
+}
+
+export function useAsync(notify, onLogout) {
+  const [busy, setBusy] = useState(false);
+  const run = useCallback(
+    async (fn, { success, onError } = {}) => {
+      setBusy(true);
+      try {
+        const res = await fn();
+        if (success) notify({ text: typeof success === 'function' ? success(res) : success });
+        return res;
+      } catch (err) {
+        if (err.status === 401) {
+          onLogout('Votre session a expiré. Reconnectez-vous.');
+          return null;
+        }
+        if (onError) onError(err);
+        else notify({ error: true, text: err.message });
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [notify, onLogout],
+  );
+  return [busy, run];
 }

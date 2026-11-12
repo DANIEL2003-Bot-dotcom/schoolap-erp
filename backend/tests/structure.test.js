@@ -141,6 +141,9 @@ describe('Verrouillage de l’API', () => {
       ['post', '/api/attendance/sync'],
       ['post', '/api/payments/mobile-money'],
       ['get', '/api/payments/mobile-money/TX-20261024-AAAAAAAA'],
+      ['post', '/api/finance/payments'],
+      ['get', '/api/finance/payments'],
+      ['get', '/api/finance/summary'],
     ];
     for (const [method, path] of routes) {
       const none = await request(ctx.app)[method](path);

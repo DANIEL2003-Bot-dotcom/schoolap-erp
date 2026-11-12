@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CashbookTab, CollectModal, PAYMENT_METHODS, ReceiptModal, createFinanceApi } from './finance.jsx';
 import { StudentPerformance } from './performance.jsx';
 import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, formatPhone, formatShortDate, isStrongPassword, normalizePhone, todayIso } from './lib.js';
-import { PasswordInput } from './ui.jsx';
+import { Field, Modal, PasswordInput, fieldErrors, useAsync } from './ui.jsx';
 import { useIsMobile } from './mobile.jsx';
 
 /* =============================================================================
@@ -12,6 +13,8 @@ import { useIsMobile } from './mobile.jsx';
    - Classes & personnel : classes et titulaires, bureaux (Direction, Études,
      Discipline, Comptabilité, Salle des profs), comptes du personnel, matières
    - Frais : synthèse par frais, création groupée par classe, remise / report
+     (direction uniquement : le comptable consulte et encaisse, il ne fixe pas les montants)
+   - Caisse : encaissements manuels, reçus imprimables, journal (voir finance.jsx)
    ============================================================================= */
 
 const FEE_TYPES = {
@@ -32,6 +35,7 @@ const TX_STATUS = {
   SUCCESS: { label: 'Confirmé', cls: 'badge-sms' },
   PENDING: { label: 'En attente', cls: 'badge-amber' },
   FAILED: { label: 'Échoué', cls: 'badge-red' },
+  CANCELLED: { label: 'Annulé', cls: 'badge-red' },
 };
 const OPERATOR_NAMES = { MPESA: 'M-Pesa', ORANGE_MONEY: 'Orange Money', AIRTEL_MONEY: 'Airtel Money' };
 const CSV_TEMPLATE =
@@ -115,72 +119,6 @@ function createAdminApi(token, onSlow) {
     bulkFees: (b) => call('/fees/bulk', 'POST', b),
     updateFee: (id, b) => call(`/fees/${id}`, 'PATCH', b),
   };
-}
-
-/** Transforme les détails de validation de l'API en { champ: message }. */
-function fieldErrors(err) {
-  if (!Array.isArray(err?.details)) return {};
-  return Object.fromEntries(err.details.filter((d) => d.field).map((d) => [d.field, d.message]));
-}
-
-/* ------------------------------------------------------------ Composants */
-
-function Modal({ title, onClose, wide = false, children, footer }) {
-  useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  return (
-    <div className="backdrop" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'wide' : ''}`}>
-        <div className="modal-head">
-          <h3>{title}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Fermer">
-            ×
-          </button>
-        </div>
-        <div className="modal-body scroll">{children}</div>
-        {footer && <div className="modal-foot">{footer}</div>}
-      </div>
-    </div>
-  );
-}
-
-function Field({ id, label, error, hint, children }) {
-  return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
-      {children}
-      {error ? <span className="err">{error}</span> : hint ? <span className="hint">{hint}</span> : null}
-    </div>
-  );
-}
-
-function useAsync(notify, onLogout) {
-  const [busy, setBusy] = useState(false);
-  const run = useCallback(
-    async (fn, { success, onError } = {}) => {
-      setBusy(true);
-      try {
-        const res = await fn();
-        if (success) notify({ text: typeof success === 'function' ? success(res) : success });
-        return res;
-      } catch (err) {
-        if (err.status === 401) {
-          onLogout('Votre session a expiré. Reconnectez-vous.');
-          return null;
-        }
-        if (onError) onError(err);
-        else notify({ error: true, text: err.message });
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [notify, onLogout],
-  );
-  return [busy, run];
 }
 
 /* ================================================================ Élèves */
@@ -318,7 +256,7 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
   );
 }
 
-function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit }) {
+function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit, onCollect }) {
   const [editing, setEditing] = useState(false);
   const [amountDue, setAmountDue] = useState(String(fee.amountDue));
   const [dueDate, setDueDate] = useState(fee.dueDate);
@@ -362,8 +300,13 @@ function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit }) {
         <span className={`badge ${st.cls}`}>{st.label}</span>
       </td>
       <td data-label="" className="full">
-        {canEdit && (
+        {(canEdit || (onCollect && fee.remaining > 0)) && (
           <div className="actions">
+            {onCollect && fee.remaining > 0 && !editing && (
+              <button className="btn btn-primary btn-sm" onClick={() => onCollect(fee)}>
+                Encaisser
+              </button>
+            )}
             {editing ? (
               <>
                 <button className="btn btn-ghost btn-sm" onClick={() => setEditing(false)} disabled={busy}>
@@ -373,11 +316,11 @@ function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit }) {
                   OK
                 </button>
               </>
-            ) : (
+            ) : canEdit ? (
               <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)} title="Remise ou report d’échéance">
                 Remise / report
               </button>
-            )}
+            ) : null}
           </div>
         )}
       </td>
@@ -385,9 +328,11 @@ function FeeRow({ fee, api, onChanged, notify, onLogout, canEdit }) {
   );
 }
 
-function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, onLogout }) {
+function StudentDetail({ api, financeApi, studentId, onClose, onEdit, canEditFees, canCollect, notify, onLogout }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [collectFee, setCollectFee] = useState(null);
+  const [receiptId, setReceiptId] = useState(null);
   const load = useCallback(() => {
     api
       .getStudent(studentId)
@@ -445,12 +390,14 @@ function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, o
             {!s.isActive && <span className="badge badge-red">Désinscrit</span>}
           </div>
           <div className="stat-row">
-            <div className="stat">
-              <b>{formatPct(data.attendance.rate)}</b>
-              <span>
-                Assiduité ({data.attendance.present} P / {data.attendance.absent} A)
-              </span>
-            </div>
+            {data.attendance && (
+              <div className="stat">
+                <b>{formatPct(data.attendance.rate)}</b>
+                <span>
+                  Assiduité ({data.attendance.present} P / {data.attendance.absent} A)
+                </span>
+              </div>
+            )}
             {Object.entries(totals).map(([cur, t]) => (
               <div className="stat" key={cur}>
                 <b>{formatMoney(t.due - t.paid, cur)}</b>
@@ -458,10 +405,14 @@ function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, o
               </div>
             ))}
           </div>
-          <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Résultats scolaires (moyennes)</h4>
-          <div style={{ marginBottom: 16 }}>
-            <StudentPerformance performance={data.performance} />
-          </div>
+          {data.performance && (
+            <>
+              <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Résultats scolaires (moyennes)</h4>
+              <div style={{ marginBottom: 16 }}>
+                <StudentPerformance performance={data.performance} />
+              </div>
+            </>
+          )}
           <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Frais scolaires</h4>
           {data.fees.length === 0 ? (
             <div className="empty">Aucun frais attribué.</div>
@@ -479,46 +430,86 @@ function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, o
               </thead>
               <tbody>
                 {data.fees.map((f) => (
-                  <FeeRow key={`${f.id}-${f.amountDue}-${f.dueDate}`} fee={f} api={api} onChanged={load} notify={notify} onLogout={onLogout} canEdit={canEditFees} />
+                  <FeeRow
+                    key={`${f.id}-${f.amountDue}-${f.dueDate}-${f.amountPaid}`}
+                    fee={f}
+                    api={api}
+                    onChanged={load}
+                    notify={notify}
+                    onLogout={onLogout}
+                    canEdit={canEditFees}
+                    onCollect={canCollect && financeApi ? setCollectFee : null}
+                  />
                 ))}
               </tbody>
             </table>
           )}
-          <h4 style={{ margin: '20px 0 8px', color: 'var(--navy-900)' }}>Paiements Mobile Money</h4>
+          <h4 style={{ margin: '20px 0 8px', color: 'var(--navy-900)' }}>Paiements et reçus</h4>
           {data.transactions.length === 0 ? (
             <div className="empty">Aucun paiement.</div>
           ) : (
             <table className="responsive">
               <thead>
                 <tr>
-                  <th>Transaction</th>
-                  <th>Opérateur</th>
+                  <th>Reçu</th>
+                  <th>Frais</th>
+                  <th>Mode</th>
                   <th className="num">Montant</th>
                   <th>Statut</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {data.transactions.map((t) => (
-                  <tr key={t.transactionId}>
-                    <td data-label="Transaction" className="full">
+                  <tr key={t.id}>
+                    <td data-label="Reçu" className="full">
                       <div className="student">
-                        <b>{t.transactionId}</b>
-                        <small>{new Date(t.createdAt).toLocaleString('fr-FR')}</small>
+                        <b>{t.receiptNumber ?? t.transactionId}</b>
+                        <small>
+                          {new Date(t.paidAt ?? t.createdAt).toLocaleString('fr-FR')}
+                          {t.cashier ? ` · ${t.cashier}` : ''}
+                        </small>
                       </div>
                     </td>
-                    <td data-label="Opérateur">{OPERATOR_NAMES[t.operator] ?? t.operator}</td>
+                    <td data-label="Frais">{t.feeLabel ?? '—'}</td>
+                    <td data-label="Mode" title={t.methodDetails ?? ''}>
+                      {PAYMENT_METHODS[t.method]?.short ?? OPERATOR_NAMES[t.operator] ?? t.method}
+                      {t.method === 'MOBILE_MONEY' && t.operator ? ` · ${OPERATOR_NAMES[t.operator]}` : ''}
+                    </td>
                     <td data-label="Montant" className="num">
                       {formatMoney(t.amount, t.currency)}
                     </td>
                     <td data-label="Statut">
-                      <span className={`badge ${TX_STATUS[t.status].cls}`} title={t.failureReason ?? ''}>
-                        {TX_STATUS[t.status].label}
+                      <span className={`badge ${TX_STATUS[t.status]?.cls ?? ''}`} title={t.failureReason ?? t.cancelReason ?? ''}>
+                        {TX_STATUS[t.status]?.label ?? t.status}
                       </span>
+                    </td>
+                    <td data-label="" className="full">
+                      {financeApi && (t.status === 'SUCCESS' || t.status === 'CANCELLED') && (
+                        <div className="actions">
+                          <button className="btn btn-ghost btn-sm" onClick={() => setReceiptId(t.id)}>
+                            Reçu
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+          {collectFee && financeApi && (
+            <CollectModal
+              api={financeApi}
+              initial={{ student: { id: s.id, fullName: s.fullName, matricule: s.matricule, className: s.className, guardianPhone: s.guardianPhone }, fee: collectFee }}
+              onClose={() => setCollectFee(null)}
+              onDone={load}
+              notify={notify}
+              onLogout={onLogout}
+            />
+          )}
+          {receiptId && financeApi && (
+            <ReceiptModal api={financeApi} receiptId={receiptId} canCancel={canEditFees} onClose={() => setReceiptId(null)} onChanged={load} notify={notify} onLogout={onLogout} />
           )}
         </>
       )}
@@ -683,7 +674,7 @@ function fieldErrorsList(err) {
   return Array.isArray(err?.details) ? err.details.map((d) => ({ line: null, message: d.field ? `${d.field} : ${d.message}` : d.message })) : [];
 }
 
-function StudentsTab({ api, refData, perms, notify, onLogout }) {
+function StudentsTab({ api, financeApi, refData, perms, notify, onLogout }) {
   const [filters, setFilters] = useState({ classId: '', q: '', status: 'active', page: 1 });
   const [query, setQuery] = useState('');
   const [data, setData] = useState(null);
@@ -856,6 +847,8 @@ function StudentsTab({ api, refData, perms, notify, onLogout }) {
       {modal?.type === 'detail' && (
         <StudentDetail
           api={api}
+          financeApi={perms.collect ? financeApi : null}
+          canCollect={perms.collect}
           studentId={modal.student.id}
           onClose={() => {
             close();
@@ -1448,7 +1441,10 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
       <div className="page-head">
         <div>
           <h1>Frais scolaires</h1>
-          <div className="muted">Année {data?.schoolYear ?? '…'} · élèves inscrits uniquement · remises et reports depuis la fiche de l’élève</div>
+          <div className="muted">
+            Année {data?.schoolYear ?? '…'} · élèves inscrits uniquement ·{' '}
+            {perms.fees ? 'remises et reports depuis la fiche de l’élève' : 'consultation : les montants sont fixés par la direction, encaissez depuis l’onglet Caisse'}
+          </div>
         </div>
         {perms.fees && (
           <button className="btn btn-primary" onClick={() => setOpen(true)} disabled={!refData.classes.length}>
@@ -1569,14 +1565,19 @@ function FeesTab({ api, refData, perms, notify, onLogout }) {
 
 /* ========================================================== Point d'entrée */
 
-export const ADMIN_TABS = [
-  { id: 'students', label: 'Élèves', short: 'Élèves', icon: 'students' },
-  { id: 'classes', label: 'Classes & personnel', short: 'Classes', icon: 'classes' },
-  { id: 'fees', label: 'Frais', short: 'Frais', icon: 'fees' },
-];
+/** Onglets de gestion selon les droits : le comptable a Caisse, Élèves et Frais, sans Classes & personnel. */
+export function adminTabsFor(user) {
+  const tabs = [];
+  if (can(user, 'COLLECT_PAYMENTS')) tabs.push({ id: 'cashbook', label: 'Caisse', short: 'Caisse', icon: 'cash' });
+  tabs.push({ id: 'students', label: 'Élèves', short: 'Élèves', icon: 'students' });
+  if (can(user, 'VIEW_ACADEMIC') || can(user, 'MANAGE_ACADEMIC') || can(user, 'MANAGE_STAFF')) tabs.push({ id: 'classes', label: 'Classes & personnel', short: 'Classes', icon: 'classes' });
+  tabs.push({ id: 'fees', label: 'Frais', short: 'Frais', icon: 'fees' });
+  return tabs;
+}
 
 export function AdminView({ tab, session, notify, onLogout, onSlow }) {
   const api = useMemo(() => createAdminApi(session.token, onSlow), [session.token, onSlow]);
+  const financeApi = useMemo(() => createFinanceApi(session.token, onSlow), [session.token, onSlow]);
   const [overview, setOverview] = useState(null);
   const [error, setError] = useState('');
   const perms = {
@@ -1584,6 +1585,8 @@ export function AdminView({ tab, session, notify, onLogout, onSlow }) {
     academic: can(session.user, 'MANAGE_ACADEMIC'),
     students: can(session.user, 'MANAGE_STUDENTS'),
     fees: can(session.user, 'MANAGE_FEES'),
+    collect: can(session.user, 'COLLECT_PAYMENTS'),
+    viewAcademic: can(session.user, 'VIEW_ACADEMIC'),
   };
 
   const reload = useCallback(() => {
@@ -1597,12 +1600,14 @@ export function AdminView({ tab, session, notify, onLogout, onSlow }) {
   }, [api, onLogout]);
   useEffect(reload, [reload]);
 
+  // La caisse ne dépend pas du référentiel : elle s'affiche sans attendre la vue d'ensemble.
+  if (tab === 'cashbook' && perms.collect) return <CashbookTab session={session} perms={perms} notify={notify} onLogout={onLogout} onSlow={onSlow} />;
   if (error && !overview) return <div className="alert alert-error">{error}</div>;
   if (!overview) return <div className="skeleton" style={{ height: 320 }} />;
 
   const refData = { ...overview, reload };
-  const props = { api, refData, notify, onLogout, session, perms };
-  if (tab === 'students') return <StudentsTab {...props} />;
-  if (tab === 'classes') return <ClassesTab {...props} />;
-  return <FeesTab {...props} />;
+  const props = { api, financeApi, refData, notify, onLogout, session, perms };
+  if (tab === 'classes' && (perms.viewAcademic || perms.academic || perms.staff)) return <ClassesTab {...props} />;
+  if (tab === 'fees') return <FeesTab {...props} />;
+  return <StudentsTab {...props} />;
 }

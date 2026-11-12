@@ -161,6 +161,7 @@ L'URL du serveur reste modifiable depuis l'écran de connexion (*Paramètres du 
 | Directeur — bureau Direction | `+243 990 000 001` | `Directeur@2026` | toutes (dashboard) |
 | Enseignant — Salle des professeurs | `+243 970 000 002` | `Enseignant@2026` | 5e Primaire A, 4e Humanités Scientifique |
 | Enseignante — Salle des professeurs | `+243 810 000 003` | `Enseignant@2026` | 3e Humanités Commerciale |
+| Comptable — Comptabilité / Caisse | `+243 850 000 004` | `Comptable@2026` | — (caisse, élèves, frais en consultation) |
 
 Contenu du seed :
 - 42 élèves ;
@@ -191,8 +192,10 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 | Tableau de bord et listes (consultation) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | Comptes du personnel | ✓ | ✓ | ✓ | — | — | — | — |
 | Classes, titulaires, matières | ✓ | ✓ | ✓ | ✓ | — | — | — |
+| Présences, résultats scolaires, personnel (consultation) | ✓ | ✓ | ✓ | ✓ | ✓ | — | — |
 | Inscriptions et import d'élèves | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
-| Frais, remises, relances SMS, encaissement Mobile Money | ✓ | ✓ | ✓ | — | — | ✓ | — |
+| Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, relances SMS | ✓ | ✓ | ✓ | — | — | ✓ | — |
+| Créer ou modifier des frais (remises, reports), annuler un reçu | ✓ | ✓ | ✓ | — | — | — | — |
 | Appel (application mobile) | ✓ | ✓ | ✓ | ✓ | ✓ | — | ses classes |
 | Saisie des cotes (application mobile) | ✓ | ✓ | ✓ | ✓ | — | — | ses classes |
 
@@ -200,7 +203,8 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 - Seul un **Administrateur** peut créer ou modifier un compte Administrateur. Personne ne peut changer son propre rôle ni désactiver son propre compte.
 - Les comptes sont créés par l'administration (**Classes & personnel → + Nouveau compte**). Le mot de passe initial doit compter **8 caractères minimum avec au moins une lettre et un chiffre**. Il est stocké uniquement sous forme de **hachage bcrypt (coût 12, sel aléatoire)** et n'est jamais renvoyé par l'API.
 - Le **tableau de bord est entièrement verrouillé** : il n'existe aucun mode visiteur ou démonstration. Sans jeton valide, seule la page de connexion s'affiche. Au démarrage, la session est vérifiée auprès de l'API (`/api/auth/me`) avant tout affichage. Un jeton expiré, falsifié ou appartenant à un compte désactivé ramène immédiatement à la connexion.
-- Les routes d'encaissement Mobile Money exigent un jeton et le droit « Frais ». Seul le webhook de l'opérateur reste public, protégé par sa signature HMAC.
+- Le **Comptable** encaisse et imprime les reçus, mais ne crée ni ne modifie aucun frais et ne peut pas annuler un reçu : seuls le Préfet, le Directeur et l'Administrateur le peuvent. Son tableau de bord n'affiche que les finances (caisse du jour, recouvrement, insolvables) ; présences, résultats et personnel lui sont masqués, côté écran comme côté API.
+- Les routes de caisse et d'encaissement Mobile Money exigent un jeton et le droit « Caisse ». Seul le webhook de l'opérateur reste public, protégé par sa signature HMAC.
 - Sur la page de connexion comme dans le formulaire de compte, l'**icône œil** affiche ou masque le mot de passe saisi.
 
 ---
@@ -255,11 +259,17 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 | GET | `/api/teacher/bootstrap` | droit « Appel » | Classes, élèves, matières, appel du jour et cotes, pour le mode hors ligne |
 | POST | `/api/attendance/sync` | droit « Appel » | Lot de présences (500 max) |
 | POST | `/api/grades/sync` | droit « Cotes » | Lot de cotes |
-| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, absents, insolvables |
-| POST | `/api/fees/:feeId/remind` | droit « Frais » | Relance SMS (1 par 24 h et par frais, sinon 429) |
-| POST | `/api/payments/mobile-money` | JWT + droit « Frais » (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
-| POST | `/api/payments/mobile-money/webhook` | signature HMAC | Confirmation de l'opérateur |
-| GET | `/api/payments/mobile-money/:transactionId` | JWT + droit « Frais » | Suivi du paiement |
+| GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, caisse du jour, insolvables ; absents et résultats seulement avec le droit « Vie scolaire » |
+| POST | `/api/fees/:feeId/remind` | droit « Caisse » | Relance SMS (1 par 24 h et par frais, sinon 429) |
+| POST | `/api/finance/payments` | droit « Caisse » | Encaissement manuel `{clientRequestId, schoolFeeId, amount, method: CASH\|BANK\|MOBILE_MONEY_DIRECT, bankName?, externalRef?, operator?, payerPhone?, payerName?, note?}` → 201 + reçu numéroté (rejouable sans doublon) |
+| GET | `/api/finance/payments?from=&to=&method=` | droit « Caisse » | Journal de caisse (31 jours max) : totaux par mode et par caissier |
+| GET | `/api/finance/summary?date=` | droit « Caisse » | Caisse d'une journée |
+| GET | `/api/finance/receipts/:id` | droit « Caisse » | Reçu complet (montant en lettres, reste à payer, caissier) |
+| POST | `/api/finance/receipts/:id/printed` | droit « Caisse » | Compte les impressions (DUPLICATA dès la 2e) |
+| POST | `/api/finance/payments/:id/cancel` | droit « Frais » | Annule un reçu avec motif ; le montant est retiré du solde, le tuteur est prévenu par SMS |
+| POST | `/api/payments/mobile-money` | JWT + droit « Caisse » (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
+| POST | `/api/payments/mobile-money/webhook` | signature HMAC | Confirmation de l'opérateur (émet aussi un reçu numéroté) |
+| GET | `/api/payments/mobile-money/:transactionId` | JWT + droit « Caisse » | Suivi du paiement |
 | GET | `/api/admin/overview` | droit « Consultation » | Classes (titulaire, effectif), bureaux, personnel, rôles attribuables, matières |
 | POST / PATCH / DELETE | `/api/admin/classes[/:id]` | droit « Classes » | Classes ; nom unique (409) ; suppression seulement si aucun élève |
 | POST / PATCH | `/api/admin/users[/:id]` | droit « Personnel » | Comptes Préfet / Directeur / D.E. / D.D. / Comptable / Enseignant, bureau, mot de passe (bcrypt 12), activation |
@@ -335,6 +345,23 @@ Fonctionnement :
 
 Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et faites pointer son callback vers `/api/payments/mobile-money/webhook` avec le même secret HMAC.
 
+### Caisse et reçus (onglet Caisse)
+
+- **Encaisser** : depuis l'onglet Caisse (« + Nouvel encaissement », recherche de l'élève), depuis la fiche élève ou depuis la liste des insolvables. Trois modes :
+  - **Espèces** à la caisse ;
+  - **Dépôt bancaire** : banque et numéro de bordereau obligatoires ;
+  - **Mobile Money reçu sur le téléphone de l'école** (M-Pesa, Orange Money, Airtel Money) : opérateur et référence de la transaction obligatoires.
+
+  Le montant ne peut pas dépasser le reste à payer. Un même bordereau, ou une même référence Mobile Money, ne peut être enregistré qu'une fois. Un double clic ou une coupure réseau ne crée jamais deux paiements.
+- **Reçu** : numéroté par école et par année (`000001/2026-2027`). Il indique le montant en chiffres et en lettres, le frais concerné, le total payé, le reste à payer et le nom du caissier. Le tuteur reçoit un SMS de confirmation.
+- **Impression** au choix, au moment d'imprimer :
+  - **A4** : une page coupée en deux, avec la souche pour l'école et le reçu pour le parent ;
+  - **ticket thermique 80 mm**.
+
+  Dès la deuxième impression, le reçu porte la mention **DUPLICATA**.
+- **Journal de caisse** : il montre les encaissements par période et par mode, le total du jour et la clôture par caissier. Il est imprimable.
+- **Annulation** (erreur de saisie) : réservée au Préfet, au Directeur et à l'Administrateur, avec un motif obligatoire. Le reçu reste visible, barré « Annulé ». Le montant est retiré du solde de l'élève et des totaux, et le tuteur est prévenu par SMS.
+
 ### Gestion administrative (onglets Élèves, Classes & personnel, Frais)
 
 - **Inscription** : le matricule est attribué automatiquement si on le laisse vide (`2026-0427-00001`, construit à partir de l'année et du code EPST). L'élève reçoit les frais déjà portés par sa classe pour l'année en cours (option décochable).
@@ -348,7 +375,7 @@ Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et 
   « Vérifier le fichier » fait une simulation (`dryRun`) qui liste les erreurs ligne par ligne : téléphone invalide, sexe inconnu, matricule en double ou déjà pris. L'import réel est transactionnel : tout le fichier passe, ou rien n'est écrit.
 - **Désinscription** plutôt que suppression : l'élève disparaît des listes d'appel et des statistiques, mais son historique (présences, cotes, paiements) est conservé.
 - **Personnel** : choisissez le rôle (Préfet, Directeur, D.E., D.D., Comptable, Enseignant) et le bureau. Un compte enseignant créé ici peut se connecter immédiatement sur l'application mobile. Il retrouve ses classes après « Recharger ». Désactiver un enseignant bloque sa connexion et laisse ses classes « sans titulaire ».
-- **Frais** : la création groupée ne facture jamais deux fois le même libellé à un élève. Une remise ou un report d'échéance recalcule le statut Soldé / En cours / Insolvable.
+- **Frais** (Préfet, Directeur, Administrateur ; le Comptable les consulte seulement) : la création groupée ne facture jamais deux fois le même libellé à un élève. Une remise ou un report d'échéance recalcule le statut Soldé / En cours / Insolvable.
 - Les boutons d'action n'apparaissent que si le rôle connecté en a le droit (voir 2bis). L'API applique les mêmes règles.
 
 ---

@@ -5,7 +5,7 @@ import { fromDbDate, isValidIsoDate, schoolYearOf, toDbDate, todayIn } from '../
 import { normalizeDrcPhone } from '../utils/phone.js';
 import { studentFullName } from '../utils/names.js';
 import { computeFeeStatus } from './fees.js';
-import { BCRYPT_COST, OFFICE_CODES, PASSWORD_MESSAGE, PASSWORD_RULE, ROLES, ROLE_CODES, assignableRoles, defaultOfficeFor, ensureOffices } from './roles.js';
+import { BCRYPT_COST, OFFICE_CODES, PASSWORD_MESSAGE, PASSWORD_RULE, ROLES, ROLE_CODES, assignableRoles, can, defaultOfficeFor, ensureOffices } from './roles.js';
 
 /* =============================================================================
    Gestion administrative : classes, enseignants / personnel, matières, élèves
@@ -235,7 +235,7 @@ export function parseStudentsCsv(text) {
 }
 
 // ------------------------------------------------------------------ Service
-export function createAdminService({ prisma, config }) {
+export function createAdminService({ prisma, config, finance = null }) {
   const today = () => todayIn(config.timezone);
 
   async function getClassOrThrow(user, classId) {
@@ -356,7 +356,8 @@ export function createAdminService({ prisma, config }) {
           teacherName: c.teacher?.fullName ?? null,
           studentCount: c._count.students,
         })),
-        staff: staff.map((u) => {
+        // Liste du personnel (téléphones compris) : direction et vie scolaire uniquement, pas la comptabilité.
+        staff: (can(user.role, 'VIEW_ACADEMIC') || can(user.role, 'MANAGE_STAFF') ? staff : []).map((u) => {
           const office = offices.find((o) => o.id === u.officeId);
           return {
             id: u.id,
@@ -583,25 +584,39 @@ export function createAdminService({ prisma, config }) {
         include: {
           class: { select: { name: true } },
           fees: { orderBy: [{ schoolYear: 'desc' }, { dueDate: 'asc' }] },
-          transactions: { orderBy: { createdAt: 'desc' }, take: 20 },
+          transactions: {
+            orderBy: { createdAt: 'desc' },
+            take: 50,
+            include: { recordedBy: { select: { fullName: true } }, cancelledBy: { select: { fullName: true } }, schoolFee: { select: { label: true } } },
+          },
         },
       });
       if (!s) throw notFound('Élève introuvable.');
-      const [present, absent] = await Promise.all([
-        prisma.attendance.count({ where: { studentId, status: 'PRESENT' } }),
-        prisma.attendance.count({ where: { studentId, status: 'ABSENT' } }),
-      ]);
+      // Assiduité : vie scolaire uniquement (la comptabilité ne voit que les finances).
+      let attendance = null;
+      if (can(user.role, 'VIEW_ACADEMIC')) {
+        const [present, absent] = await Promise.all([
+          prisma.attendance.count({ where: { studentId, status: 'PRESENT' } }),
+          prisma.attendance.count({ where: { studentId, status: 'ABSENT' } }),
+        ]);
+        attendance = { present, absent, rate: present + absent > 0 ? present / (present + absent) : null };
+      }
       return {
         student: studentOut(s),
-        attendance: { present, absent, rate: present + absent > 0 ? present / (present + absent) : null },
+        attendance,
         fees: s.fees.map(feeOut),
         transactions: s.transactions.map((t) => ({
+          ...(finance ? finance.paymentRow(t) : {}),
+          id: t.id,
           transactionId: t.transactionId,
+          method: t.method,
           operator: t.operator,
+          receiptNumber: t.receiptNumber,
           amount: Number(t.amount),
           currency: t.currency,
           status: t.status,
           failureReason: t.failureReason,
+          feeLabel: t.schoolFee?.label ?? null,
           createdAt: t.createdAt.toISOString(),
         })),
       };

@@ -6,7 +6,7 @@ import { runSeed } from '../prisma/seed.js';
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://schoolap:schoolap@localhost:5432/schoolap_test';
 
-export const PASSWORDS = { director: 'Directeur@Test1', teacher: 'Enseignant@Test1' };
+export const PASSWORDS = { director: 'Directeur@Test1', teacher: 'Enseignant@Test1', bursar: 'Comptable@Test1' };
 
 export function testConfig(overrides = {}) {
   return loadConfig({
@@ -29,12 +29,13 @@ export function createPrisma() {
 
 export async function resetDatabase(prisma) {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE performance_alerts, sms_logs, transactions, school_fees, grades, attendance, subjects, students, classes, users, offices, schools RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE receipt_counters, performance_alerts, sms_logs, transactions, school_fees, grades, attendance, subjects, students, classes, users, offices, schools RESTART IDENTITY CASCADE',
   );
   return runSeed(prisma, {
     log: () => {},
     directorPassword: PASSWORDS.director,
     teacherPassword: PASSWORDS.teacher,
+    bursarPassword: PASSWORDS.bursar,
   });
 }
 

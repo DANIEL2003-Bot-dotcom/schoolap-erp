@@ -4,13 +4,13 @@ import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { badRequest } from '../utils/httpError.js';
 
 /**
- * POST /api/payments/mobile-money                 → initie un paiement (JWT, permission MANAGE_FEES)
+ * POST /api/payments/mobile-money                 → initie un paiement (JWT, permission COLLECT_PAYMENTS)
  * POST /api/payments/mobile-money/webhook         → confirmation signée de l'opérateur (HMAC-SHA256, sans JWT)
- * GET  /api/payments/mobile-money/:transactionId  → suivi du statut (JWT, permission MANAGE_FEES)
+ * GET  /api/payments/mobile-money/:transactionId  → suivi du statut (JWT, permission COLLECT_PAYMENTS)
  */
 export function paymentsRouter({ prisma, config, mobileMoneyService }) {
   const router = Router();
-  const cashier = [requireAuth({ prisma, config }), requirePermission('MANAGE_FEES')];
+  const cashier = [requireAuth({ prisma, config }), requirePermission('COLLECT_PAYMENTS')];
   const initLimiter = rateLimit({
     windowMs: 60_000,
     limit: config.isTest ? 10_000 : 10,

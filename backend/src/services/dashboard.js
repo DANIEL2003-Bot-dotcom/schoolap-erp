@@ -1,9 +1,10 @@
 import { fromDbDate, schoolYearOf, toDbDate, zonedDayRange } from '../utils/dates.js';
 import { studentFullName } from '../utils/names.js';
+import { can } from './roles.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
-export function createDashboardService({ prisma, fees, performance = null, timezone = 'Africa/Lubumbashi' }) {
+export function createDashboardService({ prisma, fees, performance = null, finance: cashbook = null, timezone = 'Africa/Lubumbashi' }) {
   return {
     async summary(user, dateIso) {
       await fees.refreshStatuses();
@@ -11,8 +12,12 @@ export function createDashboardService({ prisma, fees, performance = null, timez
       const schoolYear = schoolYearOf(dateIso);
       const dayRange = zonedDayRange(dateIso, timezone); // journée civile à Goma/Lubumbashi, pas en UTC
       const schoolId = user.schoolId;
+      // La comptabilité n'a pas accès à la vie scolaire (présences, résultats) : accueil 100 % finances.
+      const academic = can(user.role, 'VIEW_ACADEMIC');
+      const cashier = can(user.role, 'COLLECT_PAYMENTS');
+      const none = Promise.resolve(null);
 
-      const [school, classes, groups, absents, feeTotals, insolvents, smsToday, performanceAlerts] = await Promise.all([
+      const [school, classes, groups, absents, feeTotals, insolvents, smsToday, performanceAlerts, cash] = await Promise.all([
         prisma.school.findUnique({ where: { id: schoolId } }),
         prisma.class.findMany({
           where: { schoolId },
@@ -24,12 +29,14 @@ export function createDashboardService({ prisma, fees, performance = null, timez
             _count: { select: { students: { where: { isActive: true } } } },
           },
         }),
-        prisma.attendance.groupBy({
-          by: ['classId', 'status'],
-          where: { date, class: { schoolId } },
-          _count: { _all: true },
-        }),
-        prisma.attendance.findMany({
+        academic
+          ? prisma.attendance.groupBy({
+              by: ['classId', 'status'],
+              where: { date, class: { schoolId } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([]),
+        !academic ? Promise.resolve([]) : prisma.attendance.findMany({
           where: { date, status: 'ABSENT', class: { schoolId } },
           orderBy: [{ class: { name: 'asc' } }, { student: { lastName: 'asc' } }],
           select: {
@@ -72,7 +79,8 @@ export function createDashboardService({ prisma, fees, performance = null, timez
           },
         }),
         prisma.smsLog.count({ where: { student: { schoolId }, createdAt: { gte: dayRange.start, lt: dayRange.end } } }),
-        performance ? performance.schoolOverview(user) : Promise.resolve({ openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] }),
+        !academic ? none : performance ? performance.schoolOverview(user) : Promise.resolve({ openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] }),
+        cashier && cashbook ? cashbook.daySummary(user, dateIso) : none,
       ]);
 
       const perClass = new Map(classes.map((c) => [c.id, { present: 0, absent: 0 }]));
@@ -108,7 +116,9 @@ export function createDashboardService({ prisma, fees, performance = null, timez
         generatedAt: new Date().toISOString(),
         school: { name: school.name, city: school.city, province: school.province, epstCode: school.epstCode },
         schoolYear,
-        attendance: {
+        access: { academic, cashier },
+        cash,
+        attendance: !academic ? null : {
           enrolled,
           present,
           absent,
@@ -118,7 +128,7 @@ export function createDashboardService({ prisma, fees, performance = null, timez
           classes: classRows,
         },
         finance,
-        smsSentToday: smsToday,
+        smsSentToday: academic ? smsToday : null,
         performanceAlerts,
         absents: absents.map((a) => ({
           attendanceId: a.id,

@@ -21,19 +21,19 @@ export function dashboardRouters({ prisma, config, dashboardService, feesService
     res.json({ success: true, ...summary });
   });
 
-  /** Alertes de résultats : liste complète et « marquer comme suivi » par la direction. */
-  dashboard.get('/performance-alerts', authenticate, requirePermission('VIEW_SCHOOL'), async (req, res) => {
+  /** Alertes de résultats : liste complète et « marquer comme suivi » par la direction (pas la comptabilité). */
+  dashboard.get('/performance-alerts', authenticate, requirePermission('VIEW_ACADEMIC'), async (req, res) => {
     const overview = await performanceService.schoolOverview(req.user, 500);
     res.json({ success: true, ...overview });
   });
-  dashboard.post('/performance-alerts/:alertId/acknowledge', authenticate, requirePermission('VIEW_SCHOOL'), async (req, res) => {
+  dashboard.post('/performance-alerts/:alertId/acknowledge', authenticate, requirePermission('VIEW_ACADEMIC'), async (req, res) => {
     const { alertId } = parseOrThrow(alertParams, req.params);
     const alert = await performanceService.acknowledge(req.user, alertId, req.body);
     res.json({ success: true, alert });
   });
 
   const fees = Router();
-  fees.post('/:feeId/remind', authenticate, requirePermission('MANAGE_FEES'), async (req, res) => {
+  fees.post('/:feeId/remind', authenticate, requirePermission('COLLECT_PAYMENTS'), async (req, res) => {
     const { feeId } = parseOrThrow(feeParams, req.params);
     const result = await feesService.sendReminder(req.user, feeId);
     res.json({ success: true, ...result });

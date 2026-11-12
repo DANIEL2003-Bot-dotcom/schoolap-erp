@@ -1,11 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { badRequest, conflict, notFound, parseOrThrow, unauthorized } from '../utils/httpError.js';
-import { fromDbDate, todayIn } from '../utils/dates.js';
+import { fromDbDate, schoolYearOf, todayIn } from '../utils/dates.js';
 import { detectOperator, formatPhone, maskPhone, normalizeDrcPhone } from '../utils/phone.js';
 import { studentFullName } from '../utils/names.js';
 import { logger } from '../utils/logger.js';
 import { computeFeeStatus, formatMoney } from './fees.js';
+import { allocateReceiptNumber, newTransactionId } from './finance.js';
 
 export const OPERATORS = Object.freeze({
   MPESA: { name: 'M-Pesa', company: 'Vodacom Congo', refPrefix: 'MP' },
@@ -52,10 +53,6 @@ export function verifyWebhookSignature(rawBody, header, secret) {
   const expected = Buffer.from(signWebhook(rawBody, secret));
   const received = Buffer.from(header);
   return expected.length === received.length && timingSafeEqual(expected, received);
-}
-
-function newTransactionId(todayIso) {
-  return `TX-${todayIso.replaceAll('-', '')}-${randomBytes(4).toString('hex').toUpperCase()}`;
 }
 
 function newOperatorReference(operator) {
@@ -235,6 +232,15 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
             RETURNING id`;
           if (rows.length === 0) throw new OverpaymentError(OVERPAYMENT_REASON);
           const updated = await db.schoolFee.findUniqueOrThrow({ where: { id: tx.schoolFeeId } });
+          // Reçu numéroté dans la même transaction : le paiement entre aussitôt dans le journal de caisse.
+          await db.transaction.update({
+            where: { id: tx.id },
+            data: {
+              paidAt: now,
+              receiptNumber: await allocateReceiptNumber(db, tx.schoolFee.student.schoolId, schoolYearOf(today)),
+              feeBalanceAfter: Math.max(0, Number(updated.amountDue) - Number(updated.amountPaid)),
+            },
+          });
           return db.schoolFee.update({
             where: { id: updated.id },
             data: { status: computeFeeStatus(updated.amountPaid, updated.amountDue, fromDbDate(updated.dueDate), today) },
@@ -253,13 +259,14 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
 
       const remaining = Math.max(0, Number(fee.amountDue) - Number(fee.amountPaid));
       const student = tx.schoolFee.student;
+      const { receiptNumber } = await prisma.transaction.findUniqueOrThrow({ where: { id: tx.id }, select: { receiptNumber: true } });
       await sms.send({
         studentId: student.id,
         phone: student.guardianPhone,
         type: 'PAYMENT_RECEIPT',
         recipientLabel: `Tuteur de ${studentFullName(student)}`,
         message:
-          `Reçu École : ${formatMoney(tx.amount, tx.currency)} reçu via ${OPERATORS[tx.operator].name} ` +
+          `Reçu École n. ${receiptNumber} : ${formatMoney(tx.amount, tx.currency)} reçu via ${OPERATORS[tx.operator].name} ` +
           `(réf. ${tx.reference}) pour ${studentFullName(student)}. ` +
           (remaining > 0 ? `Reste à payer : ${formatMoney(remaining, fee.currency)}.` : 'Frais soldé. Merci.'),
       });
@@ -268,6 +275,8 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
         processed: true,
         transactionId: tx.transactionId,
         status: 'SUCCESS',
+        receiptId: tx.id,
+        receiptNumber,
         fee: {
           id: fee.id,
           amountDue: Number(fee.amountDue),
@@ -289,6 +298,8 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
         amount: Number(tx.amount),
         currency: tx.currency,
         failureReason: tx.failureReason,
+        receiptId: tx.status === 'SUCCESS' ? tx.id : null,
+        receiptNumber: tx.receiptNumber,
         createdAt: tx.createdAt.toISOString(),
         confirmedAt: tx.webhookReceivedAt?.toISOString() ?? null,
         fee: {

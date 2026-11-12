@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ADMIN_CSS, ADMIN_TABS, AdminView } from './admin.jsx';
+import { ADMIN_CSS, AdminView, adminTabsFor } from './admin.jsx';
+import { CollectModal, FINANCE_CSS, ReceiptModal, createFinanceApi } from './finance.jsx';
 import { PERF_CSS, PerformanceCard } from './performance.jsx';
 import {
   API_URL,
@@ -30,14 +31,16 @@ import { BottomNav, InstallCard, IosInstallSheet, MOBILE_CSS, UserMenu, isIOS, i
    - Droits selon la structure EPST (Préfet, Directeur, D.E., D.D., Comptable)
    - KPI : taux de présence du jour, absents, taux de recouvrement, SMS envoyés
    - Tableau des absences avec badge « SMS envoyé »
-   - Tableau des insolvables : « Relancer par SMS » + encaissement Mobile Money
+   - Tableau des insolvables : « Relancer par SMS » + encaissement (espèces, banque, Mobile Money)
+   - Comptable : accueil 100 % finances (caisse du jour, recouvrement, insolvables),
+     sans présences ni résultats scolaires
    ============================================================================= */
 
 const SESSION_KEY = 'erp.directeur.session';
 const CACHE_PREFIX = 'erp.directeur.cache.';
 const CACHE_MAX_DAYS = 7;
 const MOBILE_LIST_LIMIT = 8;
-const NAV_TABS = [{ id: 'dashboard', label: 'Tableau de bord', short: 'Accueil', icon: 'dashboard' }, ...ADMIN_TABS];
+const HOME_TAB = { id: 'dashboard', label: 'Tableau de bord', short: 'Accueil', icon: 'dashboard' };
 
 /** Derniers chiffres consultés, gardés sur l'appareil pour une lecture sans réseau (effacés à la déconnexion). */
 function readSummaryCache(userId) {
@@ -381,7 +384,7 @@ function LoginScreen({ onLogin }) {
 
 /* --------------------------------------------------------------- Paiement MM */
 
-function PaymentModal({ fee, api, onClose, onDone, notify }) {
+function PaymentModal({ fee, api, onClose, onDone, notify, onReceipt }) {
   const [phone, setPhone] = useState(fee.guardianPhone);
   const [operator, setOperator] = useState(detectOperator(fee.guardianPhone) || 'MPESA');
   const [amount, setAmount] = useState(String(fee.remaining));
@@ -556,9 +559,16 @@ function PaymentModal({ fee, api, onClose, onDone, notify }) {
                 </button>
               </>
             ) : (
-              <button type="button" className="btn btn-primary" onClick={onClose}>
-                {phase === 'pending' ? 'Fermer (le suivi continue côté serveur)' : 'Terminer'}
-              </button>
+              <>
+                {phase === 'success' && info?.receiptId && onReceipt && (
+                  <button type="button" className="btn btn-ghost" onClick={() => onReceipt(info.receiptId)}>
+                    🖨 Reçu n° {info.receiptNumber}
+                  </button>
+                )}
+                <button type="button" className="btn btn-primary" onClick={onClose}>
+                  {phase === 'pending' ? 'Fermer (le suivi continue côté serveur)' : 'Terminer'}
+                </button>
+              </>
             )}
           </div>
         </form>
@@ -587,7 +597,12 @@ function Kpi({ tone = '', label, value, foot, bar, barTone }) {
 function Dashboard({ session, onLogout }) {
   const [slow, setSlow] = useState(false);
   const api = useMemo(() => createLiveApi(session.token, setSlow), [session]);
-  const canCollect = can(session.user, 'MANAGE_FEES');
+  const financeApi = useMemo(() => createFinanceApi(session.token, setSlow), [session]);
+  const canCollect = can(session.user, 'COLLECT_PAYMENTS');
+  const canCancelReceipts = can(session.user, 'MANAGE_FEES');
+  const navTabs = useMemo(() => [HOME_TAB, ...adminTabsFor(session.user)], [session.user]);
+  const [collect, setCollect] = useState(null); // { initial } : fenêtre d'encaissement manuel
+  const [receiptId, setReceiptId] = useState(null);
   const [date, setDate] = useState(todayIso());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -716,7 +731,16 @@ function Dashboard({ session, onLogout }) {
     return (data?.insolvents ?? []).filter((f) => !q || `${f.studentName} ${f.className} ${f.matricule} ${f.label}`.toLowerCase().includes(q));
   }, [data, insFilter]);
 
+  // Comptabilité : pas de vie scolaire (l'API renvoie attendance = null), accueil centré sur la caisse.
+  const academic = data?.access?.academic ?? can(session.user, 'VIEW_ACADEMIC');
   const att = data?.attendance;
+  const cashUsd = data?.cash?.totals?.find((t) => t.currency === 'USD')?.total ?? 0;
+  const cashCdf = data?.cash?.totals?.find((t) => t.currency === 'CDF')?.total ?? 0;
+  const insolventsFor = (f) => ({
+    student: { id: f.studentId, fullName: f.studentName, matricule: f.matricule, className: f.className, guardianPhone: f.guardianPhone },
+    fee: { id: f.feeId, label: f.label, remaining: f.remaining, currency: f.currency, amountDue: f.amountDue, amountPaid: f.amountPaid, schoolYear: data?.schoolYear },
+    source: f,
+  });
   const usd = data?.finance?.find((f) => f.currency === 'USD');
   const cdf = data?.finance?.find((f) => f.currency === 'CDF');
   const outstandingTotal = (data?.insolvents ?? []).reduce((s, f) => s + (f.currency === 'USD' ? f.remaining : 0), 0);
@@ -747,7 +771,7 @@ function Dashboard({ session, onLogout }) {
 
       <nav className="tabs" aria-label="Sections">
         <div className="tabs-inner" role="tablist">
-          {NAV_TABS.map((t) => (
+          {navTabs.map((t) => (
             <button key={t.id} role="tab" className="tab" aria-selected={tab === t.id} onClick={() => goTab(t.id)}>
               {t.label}
             </button>
@@ -764,7 +788,7 @@ function Dashboard({ session, onLogout }) {
           {mobile && <InstallCard deferred={deferredInstall} onInstall={install} onIosHelp={() => setIosHelp(true)} />}
           <div className="page-head">
             <div>
-              <h1>{mobile ? 'Tableau de bord' : 'Tableau de bord du Directeur'}</h1>
+              <h1>{!academic ? (mobile ? 'Comptabilité' : 'Tableau de bord — Comptabilité') : mobile ? 'Tableau de bord' : 'Tableau de bord du Directeur'}</h1>
               <div className="muted">
                 {formatLongDate(date)}
                 {data ? ` · mis à jour à ${formatTime(data.generatedAt)}` : ''}
@@ -778,6 +802,11 @@ function Dashboard({ session, onLogout }) {
               <button className="btn btn-ghost" onClick={() => load()} disabled={loading} aria-label="Actualiser">
                 ↻<span className="btn-refresh-label"> Actualiser</span>
               </button>
+              {!academic && canCollect && (
+                <button className="btn btn-primary" onClick={() => setCollect({ initial: null })}>
+                  + Encaisser
+                </button>
+              )}
             </div>
           </div>
 
@@ -786,7 +815,7 @@ function Dashboard({ session, onLogout }) {
               Hors ligne : chiffres enregistrés le {formatDateTime(staleAt)}. Ils seront actualisés dès le retour du réseau.
             </div>
           )}
-          {att?.classesPending?.length > 0 && (
+          {academic && att?.classesPending?.length > 0 && (
             <div className="alert alert-warn pending-alert" role="status">
               <span aria-hidden="true">⚠</span>
               <span>
@@ -808,6 +837,32 @@ function Dashboard({ session, onLogout }) {
           <section className="kpis" aria-label="Indicateurs clés">
             {!data ? (
               [0, 1, 2, 3].map((i) => <div key={i} className="kpi skeleton" style={{ minHeight: 142 }} />)
+            ) : !academic ? (
+              <>
+                <Kpi
+                  tone="green"
+                  label={date === today ? 'Encaissé aujourd’hui' : `Encaissé le ${formatShortDate(date)}`}
+                  value={formatMoney(cashUsd)}
+                  foot={`${data.cash?.count ?? 0} reçu(s) émis${cashCdf ? ` · ${formatMoney(cashCdf, 'CDF')}` : ''}`}
+                />
+                <Kpi
+                  label="Taux de recouvrement"
+                  value={formatPct(usd?.recoveryRate ?? null)}
+                  bar={usd?.recoveryRate ?? 0}
+                  foot={usd ? `${formatMoney(usd.paid)} encaissés sur ${formatMoney(usd.due)} exigibles` : 'Aucun frais exigible'}
+                />
+                <Kpi tone="red" label="Frais insolvables" value={data.insolvents.length} foot={`Reste à recouvrer : ${formatMoney(outstandingTotal)}`} />
+                <Kpi
+                  tone="grey"
+                  label="Modes de paiement"
+                  value={(data.cash?.byMethod ?? []).reduce((n, m) => n + m.count, 0)}
+                  foot={
+                    (data.cash?.byMethod ?? []).length
+                      ? data.cash.byMethod.map((m) => `${{ CASH: 'Espèces', BANK: 'Banque', MOBILE_MONEY_DIRECT: 'Mobile Money', MOBILE_MONEY: 'En ligne' }[m.method] ?? m.method} ${m.count}`).join(' · ')
+                      : 'Aucun encaissement pour cette date'
+                  }
+                />
+              </>
             ) : (
               <>
                 <Kpi
@@ -832,6 +887,7 @@ function Dashboard({ session, onLogout }) {
             )}
           </section>
 
+          {academic && (
           <div className="grid-2">
             <section className="card" aria-labelledby="abs-title">
               <div className="card-head">
@@ -949,15 +1005,19 @@ function Dashboard({ session, onLogout }) {
             </section>
           </div>
 
-          <PerformanceCard
-            data={data ? data.performanceAlerts ?? { openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] } : null}
-            api={api}
-            notify={notify}
-            onLogout={onLogout}
-            onChanged={() => load(true)}
-            mobile={mobile}
-            limit={MOBILE_LIST_LIMIT}
-          />
+          )}
+
+          {academic && (
+            <PerformanceCard
+              data={data ? data.performanceAlerts ?? { openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] } : null}
+              api={api}
+              notify={notify}
+              onLogout={onLogout}
+              onChanged={() => load(true)}
+              mobile={mobile}
+              limit={MOBILE_LIST_LIMIT}
+            />
+          )}
 
           <section className="card" aria-labelledby="ins-title">
             <div className="card-head">
@@ -1053,7 +1113,7 @@ function Dashboard({ session, onLogout }) {
                                   </>
                                 )}
                               </button>
-                              <button className="btn btn-sm btn-ghost" onClick={() => setPayFee(f)}>
+                              <button className="btn btn-sm btn-ghost" onClick={() => setCollect({ initial: insolventsFor(f) })}>
                                 Encaisser
                               </button>
                             </div>
@@ -1081,14 +1141,47 @@ function Dashboard({ session, onLogout }) {
 
       <footer>
         <span>ERP Scolaire RDC · Données en direct — {API_URL || 'API sur la même origine (proxy)'}</span>
-        <span>{tab === 'dashboard' ? 'Actualisation automatique toutes les 60 s' : 'Gestion administrative'}</span>
+        <span>{tab === 'dashboard' ? 'Actualisation automatique toutes les 60 s' : tab === 'cashbook' ? 'Caisse et reçus' : 'Gestion administrative'}</span>
       </footer>
 
       <div className="bn-spacer" aria-hidden="true" />
-      <BottomNav tabs={NAV_TABS} current={tab} onSelect={goTab} />
+      <BottomNav tabs={navTabs} current={tab} onSelect={goTab} />
       {iosHelp && <IosInstallSheet onClose={() => setIosHelp(false)} />}
 
-      {payFee && <PaymentModal fee={payFee} api={api} onClose={() => setPayFee(null)} onDone={() => load(true)} notify={notify} />}
+      {payFee && (
+        <PaymentModal
+          fee={payFee}
+          api={api}
+          onClose={() => setPayFee(null)}
+          onDone={() => load(true)}
+          notify={notify}
+          onReceipt={(id) => {
+            setPayFee(null);
+            setReceiptId(id);
+          }}
+        />
+      )}
+      {collect && (
+        <CollectModal
+          api={financeApi}
+          initial={collect.initial}
+          onClose={() => setCollect(null)}
+          onDone={() => load(true)}
+          notify={notify}
+          onLogout={onLogout}
+          onMobileMoney={
+            collect.initial?.source
+              ? () => {
+                  setPayFee(collect.initial.source);
+                  setCollect(null);
+                }
+              : null
+          }
+        />
+      )}
+      {receiptId && (
+        <ReceiptModal api={financeApi} receiptId={receiptId} canCancel={canCancelReceipts} onClose={() => setReceiptId(null)} onChanged={() => load(true)} notify={notify} onLogout={onLogout} />
+      )}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (
@@ -1263,7 +1356,7 @@ export default function App() {
 
   return (
     <>
-      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + MOBILE_CSS}</style>
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + FINANCE_CSS + MOBILE_CSS}</style>
       {content}
     </>
   );

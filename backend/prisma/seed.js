@@ -18,6 +18,7 @@ export const SEED_USERS = Object.freeze({
   director: { phone: '+243990000001', fullName: 'Mumbere Paluku Didier' },
   teacher1: { phone: '+243970000002', fullName: 'Kambale Jean' },
   teacher2: { phone: '+243810000003', fullName: 'Kavira Esther' },
+  bursar: { phone: '+243850000004', fullName: 'Furaha Kavugho Grâce' },
 });
 
 /** Générateur pseudo-aléatoire déterministe (mulberry32) : données identiques à chaque seed. */
@@ -75,6 +76,7 @@ export async function runSeed(prisma, opts = {}) {
   const today = opts.today ?? todayIn(timezone);
   const directorPassword = opts.directorPassword ?? process.env.SEED_DIRECTOR_PASSWORD ?? 'Directeur@2026';
   const teacherPassword = opts.teacherPassword ?? process.env.SEED_TEACHER_PASSWORD ?? 'Enseignant@2026';
+  const bursarPassword = opts.bursarPassword ?? process.env.SEED_BURSAR_PASSWORD ?? 'Comptable@2026';
   const rand = rng(opts.randomSeed ?? 427);
   const pick = (arr) => arr[Math.floor(rand() * arr.length)];
 
@@ -84,7 +86,7 @@ export async function runSeed(prisma, opts = {}) {
     return { skipped: true, schoolId: existing.id };
   }
 
-  const [directorHash, teacherHash] = await Promise.all([bcrypt.hash(directorPassword, 10), bcrypt.hash(teacherPassword, 10)]);
+  const [directorHash, teacherHash, bursarHash] = await Promise.all([bcrypt.hash(directorPassword, 10), bcrypt.hash(teacherPassword, 10), bcrypt.hash(bursarPassword, 10)]);
   const schoolYear = schoolYearOf(today);
 
   const result = await prisma.$transaction(
@@ -105,6 +107,9 @@ export async function runSeed(prisma, opts = {}) {
       });
       users.teacher2 = await tx.user.create({
         data: { schoolId: school.id, ...SEED_USERS.teacher2, passwordHash: teacherHash, role: 'TEACHER', officeId: offices.SALLE_DES_PROFS },
+      });
+      users.bursar = await tx.user.create({
+        data: { schoolId: school.id, ...SEED_USERS.bursar, passwordHash: bursarHash, role: 'BURSAR', officeId: offices.COMPTABILITE },
       });
 
       await tx.subject.createMany({ data: SUBJECTS.map((s) => ({ ...s, schoolId: school.id })) });
@@ -214,6 +219,7 @@ export async function runSeed(prisma, opts = {}) {
               studentId: student.id,
               schoolFeeId: feeId,
               webhookReceivedAt: createdAt,
+              paidAt: createdAt,
               createdAt,
             });
           }
@@ -281,6 +287,7 @@ export async function runSeed(prisma, opts = {}) {
   log(`[seed] Institut Mwanga créé (${schoolYear}) :`, JSON.stringify(result.counts));
   log(`[seed] Directeur  : ${SEED_USERS.director.phone}  (mot de passe : SEED_DIRECTOR_PASSWORD)`);
   log(`[seed] Enseignants: ${SEED_USERS.teacher1.phone}, ${SEED_USERS.teacher2.phone}  (mot de passe : SEED_TEACHER_PASSWORD)`);
+  log(`[seed] Comptable  : ${SEED_USERS.bursar.phone}  (mot de passe : SEED_BURSAR_PASSWORD)`);
   return result;
 }
 

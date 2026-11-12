@@ -174,7 +174,11 @@ L'adresse du serveur peut aussi être changée plus tard sur l'écran de connexi
    - Réseau revenu, une **coche verte** confirme la synchronisation.
 3. **Terminal de l'API** : les SMS simulés s'affichent, par exemple `Alerte École : Votre enfant … a été marqué ABSENT ce 24/10/2026.`
 4. **Tableau de bord** : cliquez sur « Actualiser ». Le taux de présence change et les absents portent le badge **« SMS envoyé »**.
-5. **Comptabilité** : dans « Insolvables », cliquez sur **« Encaisser »**, choisissez M-Pesa, Orange ou Airtel, puis validez. Au bout de quelques secondes, la confirmation simulée de l'opérateur met à jour le solde.
+5. **Comptabilité** : connectez-vous avec le compte Comptable (`+243 850 000 004`, `Comptable@2026`). Le tableau de bord n'affiche que les finances.
+   - Dans « Insolvables », cliquez sur **« Encaisser »** et choisissez Espèces, Banque (banque et numéro de bordereau) ou Mobile Money reçu sur le téléphone de l'école (opérateur et référence).
+   - Validez : le reçu numéroté s'affiche. Cliquez sur **« Imprimer A4 (2 exemplaires) »** ou sur **« Ticket 80 mm »**.
+   - L'onglet **Caisse** montre le journal du jour et la clôture par caissier.
+   - Le Comptable ne peut ni créer ni modifier un frais, ni annuler un reçu. Connecté en Directeur, ouvrez le reçu dans **Caisse**, puis **« Annuler ce reçu »**.
 6. **Moyennes et alertes** : dans l'onglet **Cotes**, saisissez pour un même élève 16 puis 15 (Interrogation 1 et 2), puis 7 (Devoir).
    - La moyenne de l'élève s'affiche sous son nom.
    - L'onglet **Moyennes** le signale « Baisse des résultats ».
