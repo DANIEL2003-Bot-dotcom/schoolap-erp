@@ -272,6 +272,26 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 | POST | `/api/admin/fees/bulk` | droit « Frais » | Frais pour une ou plusieurs classes (idempotent) |
 | PATCH | `/api/admin/fees/:id` | droit « Frais » | Remise / report ; montant dû ≥ déjà payé ; statut recalculé |
 
+### Suivi des résultats : moyennes et alertes de baisse
+
+| Méthode | Route | Accès | Rôle |
+|---|---|---|---|
+| GET | `/api/teacher/alerts` | enseignant (ses classes) | Alertes ouvertes (aussi incluses dans `/api/teacher/bootstrap`) |
+| POST | `/api/teacher/alerts/:id/acknowledge` | enseignant (ses classes) | « Élève pris en charge » `{note?}` |
+| GET | `/api/dashboard/performance-alerts` | droit « Consultation » | Élèves en difficulté de l'école (aussi dans `summary.performanceAlerts`) |
+| POST | `/api/dashboard/performance-alerts/:id/acknowledge` | droit « Consultation » | Prise en charge par la direction `{note?}` |
+| GET | `/api/admin/students/:id` | droit « Consultation » | La fiche élève contient `performance` : moyennes par matière et par trimestre |
+
+Fonctionnement :
+- **Moyenne** = total des points obtenus ÷ total des points possibles. Un examen sur 40 pèse donc deux fois plus qu'une interrogation sur 20. Le seuil de réussite est de **50 %**.
+- Après chaque synchronisation de cotes, le serveur recalcule les élèves concernés. Il ouvre une alerte par élève et par matière dès qu'apparaît l'un de ces signaux :
+  1. **moyenne du trimestre sous 50 %**, avec au moins 2 cotes ;
+  2. **baisse d'au moins 10 points** : la dernière cote est sous la moyenne des cotes précédentes, avec au moins 2 cotes précédentes. Pour la moyenne générale, la baisse se mesure d'un trimestre à l'autre ;
+  3. **deux échecs de suite**, sous 50 %, dans la même matière.
+- **SMS au tuteur une seule fois par baisse.** L'ouverture d'une alerte déclenche un seul SMS (type `PERFORMANCE_ALERT`), qui regroupe toutes les matières concernées. Tant que l'alerte reste ouverte, les nouvelles mauvaises cotes la mettent à jour sans renvoyer de SMS. Il part au plus un SMS de résultats par élève et par 24 h.
+- L'alerte **se ferme toute seule** quand les résultats remontent. Une nouvelle baisse ouvrira alors une nouvelle alerte.
+- Les applications enseignant (web et Android) font le **même calcul sur le téléphone, même hors ligne**. La concordance des deux calculs est vérifiée par les tests du backend.
+
 ### Synchronisation des présences
 
 Requête :

@@ -9,6 +9,8 @@ import { apiFetch, ApiError, tokenExpiry } from '../lib.js';
      /api/grades/sync, « dernière écriture gagnante » selon clientUpdatedAt
    - Échec réseau / 429 / 5xx : nouvel essai avec délai exponentiel (5 s → 15 min)
    - 401 : envoi suspendu, données conservées jusqu'à la reconnexion
+   - Alertes de résultats : reçues avec les listes, mises à jour après chaque
+     envoi de cotes qui ouvre, modifie ou ferme une alerte
    ============================================================================= */
 
 export const MAX_PAST_DAYS = 60;
@@ -177,6 +179,7 @@ export async function refreshBootstrap(token) {
     school: data.school,
     classes: data.classes,
     subjects: data.subjects,
+    alerts: data.alerts ?? [],
   };
   await kvSet('bootstrap', bootstrap);
 
@@ -198,10 +201,40 @@ export async function refreshBootstrap(token) {
     const key = gradeKey(g.studentId, g.subjectId, g.term, g.evaluation);
     const local = localGrades.get(key);
     if (local && local.sync !== 'synced') continue;
-    gradeRows.push({ key, id: g.id, studentId: g.studentId, classId: studentClass.get(g.studentId), subjectId: g.subjectId, term: g.term, evaluation: g.evaluation, maxScore: g.maxScore, score: g.score, clientUpdatedAt: g.clientUpdatedAt, sync: 'synced' });
+    gradeRows.push({ key, id: g.id, studentId: g.studentId, classId: studentClass.get(g.studentId), subjectId: g.subjectId, term: g.term, evaluation: g.evaluation, maxScore: g.maxScore, score: g.score, clientUpdatedAt: g.clientUpdatedAt, createdAt: g.createdAt ?? local?.createdAt ?? g.clientUpdatedAt, sync: 'synced' });
   }
   await putMany('grades', gradeRows);
   return bootstrap;
+}
+
+/* ------------------------------------------------- Alertes de résultats */
+
+/** Recharge uniquement les alertes (après un envoi de cotes) et les garde sur l'appareil. */
+export async function refreshAlerts(token) {
+  const data = await apiFetch('/api/teacher/alerts', { token });
+  const bootstrap = await kvGet('bootstrap');
+  if (!bootstrap) return null;
+  const next = { ...bootstrap, alerts: data.alerts ?? [] };
+  await kvSet('bootstrap', next);
+  return next;
+}
+
+/** « Élève suivi » : nécessite le réseau (l'information est partagée avec la direction). */
+export async function acknowledgeAlert(token, alertId, note) {
+  const data = await apiFetch(`/api/teacher/alerts/${alertId}/acknowledge`, { token, method: 'POST', body: note ? { note } : {} });
+  const bootstrap = await kvGet('bootstrap');
+  if (bootstrap) {
+    const next = { ...bootstrap, alerts: (bootstrap.alerts ?? []).map((a) => (a.id === alertId ? data.alert : a)) };
+    await kvSet('bootstrap', next);
+    return next;
+  }
+  return null;
+}
+
+/** Toutes les cotes d'une classe enregistrées sur l'appareil (les cotes refusées sont ignorées). */
+export async function classGrades(classId) {
+  const rows = await getAll('grades');
+  return rows.filter((r) => r.classId === classId && r.sync !== 'rejected');
 }
 
 /* --------------------------------------------------------- Saisies locales */
@@ -251,6 +284,7 @@ export async function saveGrade({ studentId, classId, subjectId, term, evaluatio
     maxScore,
     score,
     clientUpdatedAt: new Date().toISOString(),
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
     sync: 'pending',
     attempts: 0,
     nextAttemptAt: 0,
@@ -281,7 +315,7 @@ export class SyncEngine {
     this.getToken = getToken;
     this.onUnauthorized = onUnauthorized;
     this.listeners = new Set();
-    this.state = { online: navigator.onLine, syncing: false, pending: 0, rejected: 0, lastSyncAt: null, lastError: null, paused: false, smsSent: 0 };
+    this.state = { online: navigator.onLine, syncing: false, pending: 0, rejected: 0, lastSyncAt: null, lastError: null, paused: false, smsSent: 0, alertsVersion: 0, newAlerts: 0 };
     this.timer = null;
     this.debounce = null;
     this.running = null;
@@ -413,6 +447,10 @@ export class SyncEngine {
     try {
       const res = await apiFetch(path, { token, method: 'POST', body: { records: items.map(payload) } });
       if (entity === 'attendance') this.set({ smsSent: this.state.smsSent + (res.summary?.smsSent ?? 0) });
+      if (entity === 'grades' && res.alerts) {
+        const { opened = 0, updated = 0, resolved = 0 } = res.alerts;
+        if (opened + updated + resolved > 0) this.set({ alertsVersion: this.state.alertsVersion + 1, newAlerts: this.state.newAlerts + opened });
+      }
       const byIndex = new Map((res.results ?? []).map((r) => [r.index, r]));
       await this.settle(entity, items, (i) => {
         const r = byIndex.get(i);

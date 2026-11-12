@@ -6,7 +6,9 @@ import {
   MAX_PAST_DAYS,
   SyncEngine,
   TERMS,
+  acknowledgeAlert,
   attendanceFor,
+  classGrades,
   formatScore,
   gradesFor,
   isExpired,
@@ -14,6 +16,7 @@ import {
   login as apiLogin,
   parseScore,
   readSession,
+  refreshAlerts,
   refreshBootstrap,
   saveAttendance,
   saveGrade,
@@ -23,6 +26,7 @@ import {
   writeSession,
   clearLocalData,
 } from './store.js';
+import { PASS_PCT, SIGNAL_LABELS, classReport } from './averages.js';
 
 /* =============================================================================
    ESPACE ENSEIGNANT — application web installable (iPhone, Android, ordinateur)
@@ -30,6 +34,8 @@ import {
      ou bouton « Installer » (Android / ordinateur)
    - Appel et cotes enregistrés sur l'appareil, même sans réseau, puis envoyés
      automatiquement (file d'attente) — même fonctionnement que l'app Android
+   - Moyennes calculées automatiquement et élèves en difficulté signalés
+     (moyenne < 50 %, baisse ≥ 10 points, deux échecs de suite)
    ============================================================================= */
 
 const CSS = `
@@ -100,6 +106,29 @@ main{flex:1;padding:14px;max-width:760px;width:100%;margin:0 auto}
 .spinner{display:inline-block;width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-4px;margin-right:8px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .center{text-align:center;padding:40px 16px}
+.warn-card{background:#FFF4E0;border:1px solid #F6C77A;border-radius:14px;padding:12px 14px;margin-bottom:12px}
+.warn-card h2{font-size:15px;margin:0 0 6px;color:#7A4A00}
+.warn-card ul{margin:6px 0 8px;padding-left:18px;font-size:13px;color:#5C3A00;line-height:1.45}
+.badge-warn{background:#FDECEC;color:var(--red)}
+.avg{font-weight:700;font-variant-numeric:tabular-nums}
+.avg.low{color:var(--red)}.avg.ok{color:var(--green)}
+.stat b .avg{font-size:inherit}
+.avg-big{font-size:20px;flex:none;min-width:58px;text-align:right}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.chip{font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:#EEF2F8;color:var(--navy)}
+.chip.low{background:#FDECEC;color:var(--red)}
+.chip.sig{background:#FDECEC;color:var(--red)}
+.chip.sig.CHUTE{background:#FFF4E0;color:#8A5300}
+.item.flag{background:#FFFBF5;border-left:4px solid var(--orange)}
+.item.col{flex-direction:column;align-items:stretch}
+.item.col .line{display:flex;align-items:center;gap:10px}
+.reason{font-size:12px;color:#5C3A00;margin-top:4px;line-height:1.4}
+.followed{font-size:12px;color:var(--green);font-weight:600}
+.tabs-term{display:flex;gap:6px;margin-bottom:10px}
+.tabs-term button{flex:1;border:1px solid #C9D3E1;background:#fff;border-radius:10px;height:42px;font-weight:600;color:var(--grey)}
+.tabs-term button[aria-pressed=true]{background:var(--navy);border-color:var(--navy);color:#fff}
+.btn-sm{min-height:38px;padding:8px 12px;font-size:13px;border-radius:10px}
+.sub-avg{display:block;font-size:12px;color:var(--grey)}
 `;
 
 const Logo = () => (
@@ -289,8 +318,10 @@ function TopBar({ title, subtitle, onBack, sync, onSyncTap }) {
 
 /* ------------------------------------------------------------------ Accueil */
 
-function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRefresh, onOpen, onLogout }) {
+function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRefresh, onOpen, onLogout, reports }) {
   const canGrade = session.user.permissions?.includes('ENTER_GRADES');
+  const struggling = (bootstrap?.classes ?? []).flatMap((c) => (reports.get(c.id)?.struggling ?? []).map((s) => ({ ...s, cls: c })));
+  const toHandle = struggling.filter((s) => s.signals.some((x) => x.server?.status !== 'ACKNOWLEDGED'));
   return (
     <main>
       <InstallHint />
@@ -315,6 +346,33 @@ function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRe
         {refreshError && <div className="err-text" style={{ marginTop: 8 }}>{refreshError}</div>}
       </div>
 
+      {toHandle.length > 0 && (
+        <div className="warn-card" role="status">
+          <h2>⚠ {toHandle.length} élève(s) en difficulté</h2>
+          <div className="muted" style={{ color: '#7A4A00' }}>
+            Résultats en baisse : intervenez avant la fin de l’année. Le tuteur est prévenu une fois par SMS à chaque nouvelle baisse.
+          </div>
+          <ul>
+            {toHandle.slice(0, 4).map((s) => (
+              <li key={s.student.id}>
+                <b>{studentName(s.student)}</b> ({s.cls.name}) — {s.signals[0].summary}
+                {s.signals.length > 1 ? ` (+${s.signals.length - 1})` : ''}
+              </li>
+            ))}
+            {toHandle.length > 4 && <li>… et {toHandle.length - 4} autre(s)</li>}
+          </ul>
+          {bootstrap.classes.length === 1 ? (
+            <button className="btn btn-primary btn-block" onClick={() => onOpen('results', bootstrap.classes[0].id)}>
+              Voir les moyennes et les élèves à aider
+            </button>
+          ) : (
+            <div className="muted" style={{ color: '#7A4A00' }}>
+              Touchez « Moyennes » sur la classe concernée.
+            </div>
+          )}
+        </div>
+      )}
+
       {!bootstrap ? (
         <div className="card center">
           <b>Aucune liste sur ce téléphone</b>
@@ -330,7 +388,10 @@ function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRe
           <div className="card class-card" key={c.id}>
             <div className="meta">
               <h2 style={{ margin: 0 }}>{c.name}</h2>
-              <span className="badge">{c.students.length} élèves</span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                {(reports.get(c.id)?.struggling.length ?? 0) > 0 && <span className="badge badge-warn">⚠ {reports.get(c.id).struggling.length} en difficulté</span>}
+                <span className="badge">{c.students.length} élèves</span>
+              </span>
             </div>
             <div className="row-actions">
               <button className="btn btn-primary" onClick={() => onOpen('attendance', c.id)}>
@@ -342,6 +403,9 @@ function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRe
                 </button>
               )}
             </div>
+            <button className="btn btn-ghost btn-block" style={{ marginTop: 8 }} onClick={() => onOpen('results', c.id)}>
+              Moyennes et élèves en difficulté
+            </button>
           </div>
         ))
       )}
@@ -453,6 +517,11 @@ function AttendanceScreen({ cls, engine, sync }) {
 
 /* -------------------------------------------------------------------- Cotes */
 
+function Avg({ value, className = '' }) {
+  if (value == null) return <span className={`avg ${className}`}>—</span>;
+  return <span className={`avg ${value < PASS_PCT ? 'low' : 'ok'} ${className}`}>{Math.round(value)} %</span>;
+}
+
 function GradesScreen({ cls, subjects, engine, sync }) {
   const [subjectId, setSubjectId] = useState(subjects[0]?.id ?? '');
   const [term, setTerm] = useState('T1');
@@ -462,7 +531,27 @@ function GradesScreen({ cls, subjects, engine, sync }) {
   const [values, setValues] = useState({});
   const [errors, setErrors] = useState({});
   const inputs = useRef({});
+  const [allGrades, setAllGrades] = useState([]);
   const selection = useMemo(() => ({ classId: cls.id, subjectId, term, evaluation }), [cls.id, subjectId, term, evaluation]);
+
+  // Moyenne automatique de l'élève dans la matière et la période choisies (toutes évaluations confondues).
+  useEffect(() => {
+    classGrades(cls.id).then(setAllGrades);
+  }, [cls.id, grades, sync.syncing]);
+  const subjectAvg = useMemo(() => {
+    const out = new Map();
+    for (const s of cls.students) {
+      const list = allGrades.filter((g) => g.studentId === s.id && g.subjectId === subjectId && g.term === term);
+      let score = 0;
+      let maxTotal = 0;
+      for (const g of list) {
+        score += g.score;
+        maxTotal += g.maxScore;
+      }
+      out.set(s.id, maxTotal > 0 ? { pct: (score / maxTotal) * 100, n: list.length } : null);
+    }
+    return out;
+  }, [allGrades, cls.students, subjectId, term]);
 
   useEffect(() => {
     let alive = true;
@@ -568,6 +657,11 @@ function GradesScreen({ cls, subjects, engine, sync }) {
               <b>
                 {i + 1}. {studentName(s)}
               </b>
+              {subjectAvg.get(s.id) && (
+                <small className="sub-avg">
+                  Moyenne {term} : <Avg value={subjectAvg.get(s.id).pct} /> ({subjectAvg.get(s.id).n} cote{subjectAvg.get(s.id).n > 1 ? 's' : ''})
+                </small>
+              )}
               {errors[s.id] && <small className="err-text">{errors[s.id]}</small>}
               {grades.get(s.id)?.sync === 'rejected' && <small className="err-text">{grades.get(s.id).error}</small>}
             </div>
@@ -599,6 +693,155 @@ function GradesScreen({ cls, subjects, engine, sync }) {
   );
 }
 
+/* ----------------------------------------------------------- Moyennes */
+
+function ResultsScreen({ cls, subjects, report, session, online, onAcknowledged }) {
+  const [term, setTerm] = useState(null);
+  const [onlyStruggling, setOnlyStruggling] = useState(report.struggling.length > 0);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState('');
+  const terms = report.termsWithGrades;
+  const current = term && terms.includes(term) ? term : terms[terms.length - 1];
+  const subjectName = new Map(subjects.map((s) => [s.id, s.name]));
+
+  async function acknowledge(alert, student) {
+    const note = window.prompt(`Prise en charge de ${studentName(student)}.\nSuite donnée (facultatif) : parent convoqué, remédiation…`, '');
+    if (note === null) return;
+    setBusy(alert.id);
+    setError('');
+    try {
+      await onAcknowledged(alert.id, note.trim().slice(0, 300));
+    } catch (err) {
+      setError(err.status === 0 ? 'Pas de réseau : réessayez quand la connexion revient.' : err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!terms.length)
+    return (
+      <main className="center muted">
+        Aucune cote pour cette classe. Les moyennes se calculent automatiquement dès la saisie des premières cotes.
+      </main>
+    );
+
+  const rows = report.students
+    .filter((r) => !onlyStruggling || r.signals.length > 0)
+    .sort((a, b) => b.signals.length - a.signals.length || (a.averages.terms[current]?.general ?? 101) - (b.averages.terms[current]?.general ?? 101));
+  const classAvg = (() => {
+    const values = report.students.map((r) => r.averages.terms[current]?.general).filter((v) => v != null);
+    return values.length ? values.reduce((s, v) => s + v, 0) / values.length : null;
+  })();
+  const below = report.students.filter((r) => (r.averages.terms[current]?.general ?? 100) < PASS_PCT).length;
+
+  return (
+    <main>
+      <div className="tabs-term" role="group" aria-label="Période">
+        {terms.map((t) => (
+          <button key={t} type="button" aria-pressed={t === current} onClick={() => setTerm(t)}>
+            {TERMS.find((x) => x.code === t)?.label ?? t}
+          </button>
+        ))}
+      </div>
+      <div className="stats">
+        <div className="stat">
+          <b>
+            <Avg value={classAvg} />
+          </b>
+          <span>Moyenne de la classe</span>
+        </div>
+        <div className="stat">
+          <b style={{ color: below ? 'var(--red)' : 'var(--green)' }}>{below}</b>
+          <span>Sous 50 %</span>
+        </div>
+        <div className="stat">
+          <b style={{ color: report.struggling.length ? 'var(--red)' : 'var(--green)' }}>{report.struggling.length}</b>
+          <span>En difficulté</span>
+        </div>
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      <div className="tabs-term" role="group" aria-label="Filtre">
+        <button type="button" aria-pressed={onlyStruggling} onClick={() => setOnlyStruggling(true)}>
+          En difficulté ({report.struggling.length})
+        </button>
+        <button type="button" aria-pressed={!onlyStruggling} onClick={() => setOnlyStruggling(false)}>
+          Tous les élèves ({report.students.length})
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <div className="card center">
+          <b>Aucun élève en difficulté 👍</b>
+          <p className="muted">Une alerte apparaît dès qu’un élève passe sous 50 %, perd 10 points ou enchaîne deux échecs dans une matière.</p>
+        </div>
+      ) : (
+        <div className="list">
+          {rows.map((r) => {
+            const t = r.averages.terms[current];
+            const subjectEntries = t ? Object.entries(t.subjects).sort((a, b) => (subjectName.get(a[0]) ?? '').localeCompare(subjectName.get(b[0]) ?? '', 'fr')) : [];
+            return (
+              <div className={`item col ${r.signals.length ? 'flag' : ''}`} key={r.student.id}>
+                <div className="line">
+                  <div className="who">
+                    <b>{studentName(r.student)}</b>
+                    <small>
+                      {t ? `${t.count} cote(s) au ${current}` : `Aucune cote au ${current}`} · année : <Avg value={r.averages.year.general} />
+                    </small>
+                  </div>
+                  <Avg value={t?.general} className="avg-big" />
+                </div>
+                {subjectEntries.length > 0 && (
+                  <div className="chips">
+                    {subjectEntries.map(([id, v]) => (
+                      <span key={id} className={`chip ${v < PASS_PCT ? 'low' : ''}`}>
+                        {subjectName.get(id) ?? 'Matière'} {Math.round(v)} %
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {r.signals.map((s) => (
+                  <div key={s.key} className="reason">
+                    <div className="chips">
+                      {s.signals.map((x) => (
+                        <span key={x} className={`chip sig ${x}`}>
+                          {SIGNAL_LABELS[x]}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 3 }}>{s.summary}</div>
+                    {s.server ? (
+                      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        {s.server.smsStatus === 'SENT' && <span className="followed">✉ Tuteur prévenu par SMS</span>}
+                        {s.server.status === 'ACKNOWLEDGED' ? (
+                          <span className="followed">
+                            ✓ Suivi{s.server.acknowledgedBy ? ` par ${s.server.acknowledgedBy}` : ''}
+                            {s.server.note ? ` — ${s.server.note}` : ''}
+                          </span>
+                        ) : (
+                          <button className="btn btn-ghost btn-sm" disabled={!online || busy === s.server.id} onClick={() => acknowledge(s.server, r.student)}>
+                            {busy === s.server.id ? 'Envoi…' : '✓ Élève pris en charge'}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                        Alerte calculée sur le téléphone : elle sera transmise à la direction et au tuteur à l’envoi des cotes.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="muted" style={{ textAlign: 'center', marginTop: 14 }}>
+        Moyenne = total des points obtenus ÷ total des points possibles. Seuil de réussite : 50 %.
+        {session.user.role !== 'TEACHER' ? '' : ' La direction voit aussi ces alertes.'}
+      </p>
+    </main>
+  );
+}
+
 /* ---------------------------------------------------------------------- App */
 
 export default function TeacherApp() {
@@ -609,12 +852,37 @@ export default function TeacherApp() {
   const [screen, setScreen] = useState({ name: 'home' });
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState('');
+  const [reports, setReports] = useState(new Map());
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
   const engine = useMemo(() => new SyncEngine({ getToken: () => sessionRef.current?.token, onUnauthorized: () => setNeedsLogin(true) }), []);
   const [sync, setSync] = useState(engine.state);
   useEffect(() => engine.subscribe(setSync), [engine]);
+
+  // Moyennes et élèves en difficulté, recalculés à chaque saisie et après chaque envoi (hors ligne compris).
+  useEffect(() => {
+    if (!bootstrap?.classes?.length) {
+      setReports(new Map());
+      return undefined;
+    }
+    let alive = true;
+    Promise.all(bootstrap.classes.map(async (c) => [c.id, classReport(c, await classGrades(c.id), bootstrap.subjects, (bootstrap.alerts ?? []).filter((a) => a.classId === c.id))])).then(
+      (entries) => alive && setReports(new Map(entries)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [bootstrap, sync.pending, sync.syncing, screen.name]);
+
+  // Une alerte a été ouverte, modifiée ou fermée par le serveur : on recharge la liste des alertes.
+  useEffect(() => {
+    const token = sessionRef.current?.token;
+    if (!sync.alertsVersion || !token) return;
+    refreshAlerts(token)
+      .then((b) => b && setBootstrap(b))
+      .catch(() => {});
+  }, [sync.alertsVersion]);
 
   const refresh = useCallback(async () => {
     const token = sessionRef.current?.token;
@@ -709,12 +977,24 @@ export default function TeacherApp() {
     const cls = bootstrap?.classes.find((c) => c.id === screen.classId);
     const syncTap = () => (sync.online ? engine.run() : window.alert('Pas de réseau : vos saisies sont enregistrées sur le téléphone et partiront automatiquement au retour du réseau.'));
     if (screen.name !== 'home' && cls) {
-      const title = screen.name === 'attendance' ? `Appel — ${cls.name}` : `Cotes — ${cls.name}`;
+      const title = screen.name === 'attendance' ? `Appel — ${cls.name}` : screen.name === 'results' ? `Moyennes — ${cls.name}` : `Cotes — ${cls.name}`;
       content = (
         <>
           <TopBar title={title} subtitle={`${cls.students.length} élèves`} onBack={back} sync={sync} onSyncTap={syncTap} />
           {screen.name === 'attendance' ? (
             <AttendanceScreen cls={cls} engine={engine} sync={sync} />
+          ) : screen.name === 'results' ? (
+            <ResultsScreen
+              cls={cls}
+              subjects={bootstrap.subjects}
+              report={reports.get(cls.id) ?? classReport(cls, [], bootstrap.subjects)}
+              session={session}
+              online={sync.online}
+              onAcknowledged={async (alertId, note) => {
+                const b = await acknowledgeAlert(sessionRef.current.token, alertId, note);
+                if (b) setBootstrap(b);
+              }}
+            />
           ) : (
             <GradesScreen cls={cls} subjects={bootstrap.subjects} engine={engine} sync={sync} />
           )}
@@ -734,6 +1014,7 @@ export default function TeacherApp() {
             onRefresh={refresh}
             onOpen={open}
             onLogout={logout}
+            reports={reports}
           />
         </>
       );

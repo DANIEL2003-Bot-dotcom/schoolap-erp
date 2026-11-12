@@ -1,13 +1,18 @@
 import { Router } from 'express';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { z } from 'zod';
 import { fromDbDate, toDbDate, todayIn } from '../utils/dates.js';
+import { parseOrThrow } from '../utils/httpError.js';
+
+const alertParams = z.object({ alertId: z.uuid({ error: 'Identifiant d’alerte invalide.' }) });
 
 /**
  * GET /api/teacher/bootstrap
  * Tout ce dont l'application mobile a besoin pour fonctionner hors-ligne :
- * classes de l'enseignant, élèves, matières, appel du jour et cotes déjà synchronisés.
+ * classes de l'enseignant, élèves, matières, appel du jour, cotes déjà synchronisés
+ * et alertes de baisse des résultats en cours (les moyennes se calculent sur l'appareil, hors-ligne).
  */
-export function teacherRouter({ prisma, config }) {
+export function teacherRouter({ prisma, config, performanceService }) {
   const router = Router();
   router.use(requireAuth({ prisma, config }), requirePermission('TAKE_ATTENDANCE'));
 
@@ -34,9 +39,10 @@ export function teacherRouter({ prisma, config }) {
 
     const classIds = classes.map((c) => c.id);
     const studentIds = classes.flatMap((c) => c.students.map((s) => s.id));
-    const [attendance, grades] = await Promise.all([
+    const [attendance, grades, alerts] = await Promise.all([
       prisma.attendance.findMany({ where: { classId: { in: classIds }, date: toDbDate(today) } }),
       prisma.grade.findMany({ where: { studentId: { in: studentIds } } }),
+      performanceService.listForUser(user),
     ]);
 
     res.json({
@@ -71,8 +77,22 @@ export function teacherRouter({ prisma, config }) {
         score: Number(g.score),
         version: g.version,
         clientUpdatedAt: g.clientUpdatedAt.toISOString(),
+        createdAt: g.createdAt.toISOString(),
       })),
+      alerts,
     });
+  });
+
+  /** Alertes de résultats des classes de l'enseignant (rafraîchissement sans tout recharger). */
+  router.get('/alerts', async (req, res) => {
+    res.json({ success: true, alerts: await performanceService.listForUser(req.user) });
+  });
+
+  /** « Élève suivi » : l'enseignant a pris l'élève en charge (remédiation, parent rencontré…). */
+  router.post('/alerts/:alertId/acknowledge', async (req, res) => {
+    const { alertId } = parseOrThrow(alertParams, req.params);
+    const alert = await performanceService.acknowledge(req.user, alertId, req.body);
+    res.json({ success: true, alert });
   });
 
   return router;

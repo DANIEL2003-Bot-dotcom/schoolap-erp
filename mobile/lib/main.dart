@@ -5,6 +5,8 @@
 //  • Saisie rapide des cotes (tableau clavier numérique, passage automatique à l'élève suivant)
 //  • File d'attente HTTP persistante (table outbox) rejouée vers l'API Node :
 //    lots, accusés par enregistrement, backoff exponentiel, reprise au retour du réseau
+//  • Moyennes automatiques et élèves en difficulté (calculés sur le téléphone, hors-ligne) :
+//    moyenne < 50 %, baisse ≥ 10 points, deux échecs de suite ; alertes partagées avec la direction
 //
 //  Lancement :  flutter run --dart-define=API_URL=https://schoolap-erp-api.onrender.com
 // =============================================================================
@@ -205,6 +207,7 @@ class GradeEntry {
     required this.score,
     required this.isSynced,
     this.syncError,
+    this.createdAt,
   });
   final String id;
   final String studentId;
@@ -215,6 +218,8 @@ class GradeEntry {
   final double score;
   final bool isSynced;
   final String? syncError;
+  /// Date de première saisie (ordre chronologique des évaluations).
+  final String? createdAt;
 
   SyncState get state => syncError != null ? SyncState.error : (isSynced ? SyncState.synced : SyncState.local);
 
@@ -228,7 +233,174 @@ class GradeEntry {
         score: (r['score'] as num).toDouble(),
         isSynced: (r['is_synced'] as int) == 1,
         syncError: r['sync_error'] as String?,
+        createdAt: r['created_at'] as String?,
       );
+}
+
+// =============================================================================
+//  Moyennes et signaux de baisse — mêmes règles que le serveur
+//  (backend/src/services/performance.js) :
+//  • Moyenne = total des points obtenus / total des points possibles × 100
+//  • Par matière (seuil 50 %) : deux échecs de suite ; moyenne du trimestre
+//    sous 50 % (≥ 2 cotes) ; dernière cote ≥ 10 points sous la moyenne des
+//    cotes précédentes (≥ 2 cotes précédentes)
+//  • Moyenne générale : baisse ≥ 10 points d'un trimestre à l'autre (≥ 3 cotes)
+// =============================================================================
+
+const double kPassPct = 50;
+const double kDropPoints = 10;
+const String kGeneralKey = 'GENERAL';
+const List<String> kSignalOrder = ['ECHECS_CONSECUTIFS', 'FAIBLE', 'CHUTE'];
+const Map<String, String> kSignalLabels = {
+  'ECHECS_CONSECUTIFS': 'Deux échecs de suite',
+  'FAIBLE': 'Moyenne sous 50 %',
+  'CHUTE': 'Baisse des résultats',
+};
+
+double? averagePct(Iterable<GradeEntry> grades) {
+  var score = 0.0;
+  var max = 0.0;
+  for (final g in grades) {
+    score += g.score;
+    max += g.maxScore;
+  }
+  return max > 0 ? score / max * 100 : null;
+}
+
+double _round1(double v) => (v * 10).roundToDouble() / 10;
+String pctText(double v) => '${v.round()} %';
+
+List<GradeEntry> chronological(Iterable<GradeEntry> grades) {
+  final list = grades.toList();
+  int ms(GradeEntry g) => DateTime.tryParse(g.createdAt ?? '')?.millisecondsSinceEpoch ?? 0;
+  list.sort((a, b) {
+    final t = kTerms.indexOf(a.term).compareTo(kTerms.indexOf(b.term));
+    if (t != 0) return t;
+    final c = ms(a).compareTo(ms(b));
+    if (c != 0) return c;
+    return a.evaluation.compareTo(b.evaluation);
+  });
+  return list;
+}
+
+class PerformanceSignal {
+  const PerformanceSignal({required this.key, required this.subjectId, required this.term, required this.signals, required this.summary, this.averagePct, this.alert});
+  final String key;
+  final String? subjectId;
+  final String term;
+  final List<String> signals;
+  final String summary;
+  final double? averagePct;
+  /// Alerte correspondante du serveur (SMS au tuteur, prise en charge), si déjà transmise.
+  final Map<String, dynamic>? alert;
+}
+
+List<PerformanceSignal> detectSignals(List<GradeEntry> grades, Map<String, String> subjectNames) {
+  final found = <PerformanceSignal>[];
+  final bySubject = <String, List<GradeEntry>>{};
+  for (final g in chronological(grades)) {
+    bySubject.putIfAbsent(g.subjectId, () => []).add(g);
+  }
+  bySubject.forEach((subjectId, list) {
+    final name = subjectNames[subjectId] ?? 'Matière';
+    final term = list.last.term;
+    final signals = <String>[];
+    final reasons = <String>[];
+    final inTerm = list.where((g) => g.term == term).toList();
+    final termAvg = averagePct(inTerm);
+    final last = list.last.score / list.last.maxScore * 100;
+    if (list.length >= 2) {
+      final before = list[list.length - 2].score / list[list.length - 2].maxScore * 100;
+      if (before < kPassPct && last < kPassPct) {
+        signals.add('ECHECS_CONSECUTIFS');
+        reasons.add('deux échecs de suite (${pctText(before)} puis ${pctText(last)})');
+      }
+    }
+    if (inTerm.length >= 2 && termAvg != null && termAvg < kPassPct) {
+      signals.add('FAIBLE');
+      reasons.add('moyenne $term ${pctText(termAvg)} (sous 50 %)');
+    }
+    if (list.length >= 3) {
+      final reference = averagePct(list.sublist(0, list.length - 1))!;
+      if (last <= reference - kDropPoints) {
+        signals.add('CHUTE');
+        reasons.add('baisse de ${(reference - last).round()} points (${pctText(last)} contre ${pctText(reference)} avant)');
+      }
+    }
+    if (signals.isEmpty) return;
+    found.add(PerformanceSignal(
+      key: subjectId,
+      subjectId: subjectId,
+      term: term,
+      signals: signals,
+      summary: '$name : ${reasons.join(' · ')}',
+      averagePct: termAvg == null ? null : _round1(termAvg),
+    ));
+  });
+
+  final termsWith3 = kTerms.where((t) => grades.where((g) => g.term == t).length >= 3).toList();
+  final present = kTerms.where((t) => grades.any((g) => g.term == t)).toList();
+  if (present.isNotEmpty && termsWith3.contains(present.last)) {
+    final latest = present.last;
+    final previous = termsWith3.where((t) => kTerms.indexOf(t) < kTerms.indexOf(latest)).toList();
+    if (previous.isNotEmpty) {
+      final current = averagePct(grades.where((g) => g.term == latest))!;
+      final before = averagePct(grades.where((g) => g.term == previous.last))!;
+      if (current <= before - kDropPoints) {
+        found.add(PerformanceSignal(
+          key: kGeneralKey,
+          subjectId: null,
+          term: latest,
+          signals: const ['CHUTE'],
+          summary: 'Moyenne générale en baisse : ${pctText(current)} au $latest contre ${pctText(before)} au ${previous.last}',
+          averagePct: _round1(current),
+        ));
+      }
+    }
+  }
+  return found;
+}
+
+/// Moyennes d'un élève et signaux de baisse (complétés par les alertes du serveur).
+class StudentReport {
+  StudentReport({required this.student, required this.grades, required this.signals});
+  final Student student;
+  final List<GradeEntry> grades;
+  final List<PerformanceSignal> signals;
+
+  double? termAverage(String term) => averagePct(grades.where((g) => g.term == term));
+  double? subjectAverage(String subjectId, String term) => averagePct(grades.where((g) => g.subjectId == subjectId && g.term == term));
+  double? get yearAverage => averagePct(grades);
+  int countIn(String term) => grades.where((g) => g.term == term).length;
+  bool get needsFollowUp => signals.any((s) => s.alert?['status'] != 'ACKNOWLEDGED');
+}
+
+List<StudentReport> buildClassReport(List<Student> students, List<GradeEntry> grades, List<Subject> subjects, List<Map<String, dynamic>> alerts) {
+  final names = {for (final s in subjects) s.id: s.name};
+  final reports = <StudentReport>[];
+  for (final st in students) {
+    final own = grades.where((g) => g.studentId == st.id).toList();
+    final serverAlerts = {for (final a in alerts.where((a) => a['studentId'] == st.id)) (a['subjectId'] as String?) ?? kGeneralKey: a};
+    final signals = <PerformanceSignal>[];
+    for (final sig in detectSignals(own, names)) {
+      final sorted = kSignalOrder.where(sig.signals.contains).toList();
+      signals.add(PerformanceSignal(key: sig.key, subjectId: sig.subjectId, term: sig.term, signals: sorted, summary: sig.summary, averagePct: sig.averagePct, alert: serverAlerts.remove(sig.key)));
+    }
+    // Alerte du serveur sans signal local (cotes saisies ailleurs, listes pas encore rechargées)
+    for (final a in serverAlerts.values) {
+      signals.add(PerformanceSignal(
+        key: (a['subjectId'] as String?) ?? kGeneralKey,
+        subjectId: a['subjectId'] as String?,
+        term: a['term'] as String,
+        signals: ((a['signals'] as List?) ?? const []).cast<String>(),
+        summary: a['summary'] as String,
+        averagePct: (a['averagePct'] as num?)?.toDouble(),
+        alert: a,
+      ));
+    }
+    reports.add(StudentReport(student: st, grades: own, signals: signals));
+  }
+  return reports;
 }
 
 class OutboxItem {
@@ -272,7 +444,14 @@ class LocalDb {
     final dbPath = path ?? p.join(await f.getDatabasesPath(), 'ecole_erp.db');
     final database = await f.openDatabase(
       dbPath,
-      options: OpenDatabaseOptions(version: 1, onCreate: (db, _) => _create(db)),
+      options: OpenDatabaseOptions(
+        version: 2,
+        onCreate: (db, _) => _create(db),
+        onUpgrade: (db, from, to) async {
+          // v2 : date de première saisie des cotes (ordre chronologique pour les alertes de baisse)
+          if (from < 2) await db.execute('ALTER TABLE grades ADD COLUMN created_at TEXT');
+        },
+      ),
     );
     return LocalDb._(database);
   }
@@ -295,7 +474,7 @@ class LocalDb {
     batch.execute('''CREATE TABLE grades (
       id TEXT PRIMARY KEY, server_id TEXT, student_id TEXT NOT NULL, subject_id TEXT NOT NULL, term TEXT NOT NULL,
       evaluation TEXT NOT NULL, max_score REAL NOT NULL, score REAL NOT NULL, client_updated_at TEXT NOT NULL,
-      is_synced INTEGER NOT NULL DEFAULT 0, sync_error TEXT,
+      is_synced INTEGER NOT NULL DEFAULT 0, sync_error TEXT, created_at TEXT,
       UNIQUE (student_id, subject_id, term, evaluation))''');
     // File d'attente des requêtes HTTP : une seule entrée par enregistrement (la plus récente).
     batch.execute('''CREATE TABLE outbox (
@@ -380,9 +559,29 @@ class LocalDb {
           'score': (g['score'] as num).toDouble(),
           'client_updated_at': g['clientUpdatedAt'],
           'is_synced': 1,
+          'created_at': g['createdAt'] ?? (local.isEmpty ? null : local.first['created_at']) ?? g['clientUpdatedAt'],
         });
       }
+      await txn.insert('kv', {'key': 'alerts', 'value': jsonEncode(data['alerts'] ?? const [])}, conflictAlgorithm: ConflictAlgorithm.replace);
     });
+  }
+
+  // ------------------------------------------------------ Alertes de résultats
+  Future<List<Map<String, dynamic>>> alerts() async {
+    final raw = await getKv('alerts');
+    if (raw == null) return const [];
+    return (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> saveAlerts(List<Map<String, dynamic>> alerts) => setKv('alerts', jsonEncode(alerts));
+
+  /// Toutes les cotes d'une classe présentes sur le téléphone (les cotes refusées sont ignorées).
+  Future<List<GradeEntry>> classGrades(String classId) async {
+    final rows = await db.rawQuery(
+      'SELECT g.* FROM grades g JOIN students s ON s.id = g.student_id WHERE s.class_id = ? AND g.sync_error IS NULL',
+      [classId],
+    );
+    return rows.map(GradeEntry.fromRow).toList();
   }
 
   Future<List<SchoolClass>> classes() async =>
@@ -456,6 +655,7 @@ class LocalDb {
       final id = existing.isEmpty ? newUuid() : existing.first['id'] as String;
       final serverId = existing.isEmpty ? null : existing.first['server_id'] as String?;
       final updatedAt = nowUtcIso();
+      final createdAt = existing.isEmpty ? updatedAt : (existing.first['created_at'] as String?) ?? updatedAt;
       final row = {
         'id': id,
         'server_id': serverId,
@@ -468,6 +668,7 @@ class LocalDb {
         'client_updated_at': updatedAt,
         'is_synced': 0,
         'sync_error': null,
+        'created_at': createdAt,
       };
       await txn.insert('grades', row, conflictAlgorithm: ConflictAlgorithm.replace);
       await _enqueue(txn, entityGrade, id, {
@@ -657,6 +858,11 @@ class ApiClient {
 
   Future<Map<String, dynamic>> syncGrades(List<Map<String, dynamic>> records) =>
       _send('POST', '/api/grades/sync', body: {'records': records});
+
+  Future<Map<String, dynamic>> alerts() => _send('GET', '/api/teacher/alerts');
+
+  Future<Map<String, dynamic>> acknowledgeAlert(String alertId, String note) =>
+      _send('POST', '/api/teacher/alerts/$alertId/acknowledge', body: {if (note.isNotEmpty) 'note': note});
 }
 
 // =============================================================================
@@ -691,13 +897,15 @@ class PluginConnectivity implements ConnectivitySource {
 // =============================================================================
 
 class SyncEngine extends ChangeNotifier {
-  SyncEngine({required this.db, required this.api, required this.connectivity, this.onUnauthorized, Random? random})
+  SyncEngine({required this.db, required this.api, required this.connectivity, this.onUnauthorized, this.onAlertsChanged, Random? random})
       : _random = random ?? Random();
 
   final LocalDb db;
   final ApiClient api;
   final ConnectivitySource connectivity;
   final VoidCallback? onUnauthorized;
+  /// Le serveur a ouvert, modifié ou fermé une alerte de résultats après un envoi de cotes.
+  final VoidCallback? onAlertsChanged;
   final Random _random;
 
   bool online = false;
@@ -825,6 +1033,11 @@ class SyncEngine extends ChangeNotifier {
       serverReachable = true;
       final summary = (res['summary'] as Map?)?.cast<String, dynamic>();
       if (entity == LocalDb.entityAttendance) lastSmsSent = (summary?['smsSent'] as int?) ?? 0;
+      final alerts = (res['alerts'] as Map?)?.cast<String, dynamic>();
+      if (entity == LocalDb.entityGrade && alerts != null) {
+        final changes = ((alerts['opened'] as int?) ?? 0) + ((alerts['updated'] as int?) ?? 0) + ((alerts['resolved'] as int?) ?? 0);
+        if (changes > 0) onAlertsChanged?.call();
+      }
       final results = ((res['results'] as List?) ?? const []).cast<Map<String, dynamic>>();
       final handled = <int>{};
       for (final r in results) {
@@ -908,7 +1121,7 @@ class SyncEngine extends ChangeNotifier {
 class AppController extends ChangeNotifier {
   AppController({required this.db, required ConnectivitySource connectivity, http.Client? httpClient})
       : api = ApiClient(baseUrl: kDefaultApiUrl, client: httpClient) {
-    sync = SyncEngine(db: db, api: api, connectivity: connectivity, onUnauthorized: _onUnauthorized);
+    sync = SyncEngine(db: db, api: api, connectivity: connectivity, onUnauthorized: _onUnauthorized, onAlertsChanged: () => unawaited(refreshAlerts()));
   }
 
   final LocalDb db;
@@ -923,6 +1136,10 @@ class AppController extends ChangeNotifier {
   List<Subject> subjects = const [];
   String? selectedClassId;
   String? bootstrapError;
+  /// Alertes de résultats ouvertes pour les classes de l'enseignant (copie locale).
+  List<Map<String, dynamic>> alerts = const [];
+  /// Incrémenté à chaque changement des alertes : les écrans recalculent leurs moyennes.
+  int alertsVersion = 0;
 
   SchoolClass? get selectedClass => classes.where((c) => c.id == selectedClassId).firstOrNull;
 
@@ -955,6 +1172,8 @@ class AppController extends ChangeNotifier {
   Future<void> _loadLocal() async {
     classes = await db.classes();
     subjects = await db.subjects();
+    alerts = await db.alerts();
+    alertsVersion++;
     final saved = await db.getKv('selected_class');
     selectedClassId = classes.any((c) => c.id == saved) ? saved : (classes.isEmpty ? null : classes.first.id);
   }
@@ -1008,6 +1227,31 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Recharge la liste des alertes (après un envoi de cotes qui en a modifié).
+  Future<void> refreshAlerts() async {
+    try {
+      final res = await api.alerts();
+      alerts = ((res['alerts'] as List?) ?? const []).cast<Map<String, dynamic>>();
+      await db.saveAlerts(alerts);
+      alertsVersion++;
+      notifyListeners();
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) _onUnauthorized();
+    } on NetworkException {
+      // hors-ligne : la copie locale reste affichée
+    }
+  }
+
+  /// « Élève pris en charge » : partagé avec la direction (nécessite le réseau).
+  Future<void> acknowledgeAlert(String alertId, String note) async {
+    final res = await api.acknowledgeAlert(alertId, note);
+    final updated = (res['alert'] as Map).cast<String, dynamic>();
+    alerts = [for (final a in alerts) a['id'] == alertId ? updated : a];
+    await db.saveAlerts(alerts);
+    alertsVersion++;
+    notifyListeners();
+  }
+
   Future<void> selectClass(String id) async {
     selectedClassId = id;
     await db.setKv('selected_class', id);
@@ -1030,6 +1274,7 @@ class AppController extends ChangeNotifier {
     sessionExpired = false;
     classes = const [];
     subjects = const [];
+    alerts = const [];
     selectedClassId = null;
     await sync.refreshCounts();
     notifyListeners();
@@ -1263,6 +1508,10 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
+  /// Élèves de la classe avec une alerte du serveur pas encore prise en charge (pastille de l'onglet).
+  int _pendingAlerts(SchoolClass? cl) =>
+      cl == null ? 0 : c.alerts.where((a) => a['classId'] == cl.id && a['status'] == 'ACTIVE').map((a) => a['studentId']).toSet().length;
+
   Future<void> _confirmLogout() async {
     final pending = c.sync.pendingTotal;
     final ok = await showDialog<bool>(
@@ -1349,6 +1598,7 @@ class _HomeShellState extends State<HomeShell> {
                     children: [
                       AttendanceScreen(key: ValueKey('att-${selected.id}'), controller: c, schoolClass: selected),
                       GradesScreen(key: ValueKey('grd-${selected.id}'), controller: c, schoolClass: selected),
+                      ResultsScreen(key: ValueKey('res-${selected.id}'), controller: c, schoolClass: selected),
                     ],
                   ),
           ),
@@ -1357,9 +1607,18 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.fact_check_outlined), selectedIcon: Icon(Icons.fact_check), label: 'Appel'),
-          NavigationDestination(icon: Icon(Icons.edit_note_outlined), selectedIcon: Icon(Icons.edit_note), label: 'Cotes'),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.fact_check_outlined), selectedIcon: Icon(Icons.fact_check), label: 'Appel'),
+          const NavigationDestination(icon: Icon(Icons.edit_note_outlined), selectedIcon: Icon(Icons.edit_note), label: 'Cotes'),
+          NavigationDestination(
+            icon: Badge(
+              isLabelVisible: _pendingAlerts(selected) > 0,
+              label: Text('${_pendingAlerts(selected)}'),
+              child: const Icon(Icons.insights_outlined),
+            ),
+            selectedIcon: const Icon(Icons.insights),
+            label: 'Moyennes',
+          ),
         ],
       ),
     );
@@ -1779,6 +2038,7 @@ class _GradesScreenState extends State<GradesScreen> {
   final _maxCtrl = TextEditingController(text: '20');
   List<Student> _students = const [];
   Map<String, GradeEntry> _grades = const {};
+  List<GradeEntry> _classGrades = const [];
   final Map<String, TextEditingController> _ctrls = {};
   final Map<String, FocusNode> _focus = {};
   final Map<String, String?> _errors = {};
@@ -1820,10 +2080,12 @@ class _GradesScreenState extends State<GradesScreen> {
     final grades = _subjectId == null
         ? <String, GradeEntry>{}
         : await db.gradesFor(classId: widget.schoolClass.id, subjectId: _subjectId!, term: _term, evaluation: _evaluation);
+    final all = await db.classGrades(widget.schoolClass.id);
     if (!mounted) return;
     setState(() {
       _students = students;
       _grades = grades;
+      _classGrades = all;
       _loading = false;
       for (final s in students) {
         _ctrls.putIfAbsent(s.id, TextEditingController.new);
@@ -1850,8 +2112,18 @@ class _GradesScreenState extends State<GradesScreen> {
   Future<void> _refreshStatuses() async {
     if (_subjectId == null) return;
     final grades = await db.gradesFor(classId: widget.schoolClass.id, subjectId: _subjectId!, term: _term, evaluation: _evaluation);
-    if (mounted) setState(() => _grades = grades);
+    final all = await db.classGrades(widget.schoolClass.id);
+    if (mounted) {
+      setState(() {
+        _grades = grades;
+        _classGrades = all;
+      });
+    }
   }
+
+  /// Moyenne automatique de l'élève dans la matière et la période choisies (toutes évaluations).
+  double? _subjectAverage(String studentId) =>
+      averagePct(_classGrades.where((g) => g.studentId == studentId && g.subjectId == _subjectId && g.term == _term));
 
   void _changeSelection({String? subjectId, String? term, String? evaluation}) {
     setState(() {
@@ -1889,6 +2161,7 @@ class _GradesScreenState extends State<GradesScreen> {
             studentId: s.id, subjectId: _subjectId!, term: _term, evaluation: _evaluation, maxScore: max, score: score);
         if (!mounted) return;
         _grades = {..._grades, s.id: g};
+        _classGrades = await db.classGrades(widget.schoolClass.id);
         sync.notifyLocalChange();
       }
     }
@@ -2001,6 +2274,7 @@ class _GradesScreenState extends State<GradesScreen> {
               final g = _grades[s.id];
               final error = _errors[s.id];
               final isLast = i == _students.length - 1;
+              final avg = _subjectAverage(s.id);
               return Padding(
                 key: ValueKey('grade-row-${s.id}'),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -2009,10 +2283,15 @@ class _GradesScreenState extends State<GradesScreen> {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(s.fullName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                      Text(g?.syncError ?? s.matricule,
+                      Text(g?.syncError ?? (avg == null ? s.matricule : 'Moy. $_term : ${pctText(avg)}'),
+                          key: ValueKey('avg-${s.id}'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11, color: g?.syncError != null ? kAbsentRed : kGrey)),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: avg != null && g?.syncError == null ? FontWeight.w700 : FontWeight.normal,
+                            color: g?.syncError != null || (avg != null && avg < kPassPct) ? kAbsentRed : (avg != null ? kPresentGreen : kGrey),
+                          )),
                     ]),
                   ),
                   SizedBox(
@@ -2048,3 +2327,342 @@ class _GradesScreenState extends State<GradesScreen> {
 }
 
 const TextStyle _headStyle = TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: kGrey, letterSpacing: 0.4);
+
+// =============================================================================
+//  Moyennes et élèves en difficulté
+// =============================================================================
+
+class ResultsScreen extends StatefulWidget {
+  const ResultsScreen({super.key, required this.controller, required this.schoolClass});
+  final AppController controller;
+  final SchoolClass schoolClass;
+
+  @override
+  State<ResultsScreen> createState() => _ResultsScreenState();
+}
+
+class _ResultsScreenState extends State<ResultsScreen> {
+  List<StudentReport> _reports = const [];
+  String? _term;
+  bool _onlyStruggling = true;
+  bool _loading = true;
+  String? _busyAlert;
+  int _seenAlerts = -1;
+
+  AppController get c => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    c.sync.addListener(_reload);
+    c.addListener(_onController);
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    c.sync.removeListener(_reload);
+    c.removeListener(_onController);
+    super.dispose();
+  }
+
+  void _onController() {
+    if (c.alertsVersion != _seenAlerts) _reload();
+  }
+
+  Future<void> _reload() async {
+    _seenAlerts = c.alertsVersion;
+    final students = await c.db.studentsOfClass(widget.schoolClass.id);
+    final grades = await c.db.classGrades(widget.schoolClass.id);
+    final alerts = c.alerts.where((a) => a['classId'] == widget.schoolClass.id).toList();
+    if (!mounted) return;
+    setState(() {
+      _reports = buildClassReport(students, grades, c.subjects, alerts);
+      _loading = false;
+    });
+  }
+
+  Future<void> _acknowledge(Map<String, dynamic> alert, Student student) async {
+    final note = await showDialog<String>(
+      context: context,
+      builder: (_) => _AckDialog(studentName: student.fullName, summary: alert['summary'] as String),
+    );
+    if (note == null || !mounted) return;
+    setState(() => _busyAlert = alert['id'] as String);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await c.acknowledgeAlert(alert['id'] as String, note);
+      messenger.showSnackBar(SnackBar(content: Text('${student.fullName} : élève marqué comme suivi.')));
+    } on NetworkException {
+      messenger.showSnackBar(const SnackBar(content: Text('Pas de réseau : réessayez quand la connexion revient.')));
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busyAlert = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final terms = kTerms.where((t) => _reports.any((r) => r.countIn(t) > 0)).toList();
+    if (terms.isEmpty) {
+      return const EmptyState(
+        icon: Icons.insights,
+        title: 'Aucune cote',
+        message: 'Les moyennes se calculent automatiquement dès la saisie des premières cotes.',
+      );
+    }
+    final term = _term != null && terms.contains(_term) ? _term! : terms.last;
+    final struggling = _reports.where((r) => r.signals.isNotEmpty).toList();
+    final averages = _reports.map((r) => r.termAverage(term)).whereType<double>().toList();
+    final classAvg = averages.isEmpty ? null : averages.reduce((a, b) => a + b) / averages.length;
+    final below = averages.where((v) => v < kPassPct).length;
+    final names = {for (final s in c.subjects) s.id: s.name};
+    final rows = (_onlyStruggling ? struggling : List<StudentReport>.of(_reports))
+      ..sort((a, b) {
+        final s = b.signals.length.compareTo(a.signals.length);
+        if (s != 0) return s;
+        return (a.termAverage(term) ?? 101).compareTo(b.termAverage(term) ?? 101);
+      });
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await c.refreshAlerts();
+        await _reload();
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 120),
+        children: [
+          if (terms.length > 1)
+            SegmentedButton<String>(
+              segments: [for (final t in terms) ButtonSegment(value: t, label: Text(t))],
+              selected: {term},
+              showSelectedIcon: false,
+              onSelectionChanged: (s) => setState(() => _term = s.first),
+            ),
+          const SizedBox(height: 10),
+          Row(children: [
+            _StatBox(label: 'Moyenne classe $term', child: _PctText(classAvg, size: 20)),
+            const SizedBox(width: 8),
+            _StatBox(label: 'Sous 50 %', child: Text('$below', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: below > 0 ? kAbsentRed : kPresentGreen))),
+            const SizedBox(width: 8),
+            _StatBox(
+              label: 'En difficulté',
+              child: Text('${struggling.length}', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: struggling.isNotEmpty ? kAbsentRed : kPresentGreen)),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: ChoiceChip(
+                key: const Key('filter-struggling'),
+                label: Text('En difficulté (${struggling.length})'),
+                selected: _onlyStruggling,
+                onSelected: (_) => setState(() => _onlyStruggling = true),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ChoiceChip(
+                key: const Key('filter-all'),
+                label: Text('Tous (${_reports.length})'),
+                selected: !_onlyStruggling,
+                onSelected: (_) => setState(() => _onlyStruggling = false),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          if (rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Column(children: [
+                Icon(Icons.verified, color: kPresentGreen, size: 40),
+                SizedBox(height: 8),
+                Text('Aucun élève en difficulté', style: TextStyle(fontWeight: FontWeight.w700)),
+                SizedBox(height: 4),
+                Text('Une alerte apparaît dès qu’un élève passe sous 50 %, perd 10 points ou enchaîne deux échecs.',
+                    textAlign: TextAlign.center, style: TextStyle(color: kGrey, fontSize: 13)),
+              ]),
+            )
+          else
+            for (final r in rows) _studentCard(r, term, names),
+          const SizedBox(height: 8),
+          const Text('Moyenne = total des points obtenus ÷ total des points possibles. Seuil de réussite : 50 %.',
+              textAlign: TextAlign.center, style: TextStyle(color: kGrey, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentCard(StudentReport r, String term, Map<String, String> names) {
+    final flagged = r.signals.isNotEmpty;
+    final subjectIds = r.grades.where((g) => g.term == term).map((g) => g.subjectId).toSet().toList()
+      ..sort((a, b) => (names[a] ?? '').compareTo(names[b] ?? ''));
+    return Card(
+      key: ValueKey('result-${r.student.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      color: flagged ? const Color(0xFFFFFBF5) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: flagged ? kPendingOrange : const Color(0xFFE2E8F0), width: flagged ? 1.5 : 1),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(r.student.fullName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Row(children: [
+                  Text('${r.countIn(term)} cote(s) au $term · année : ', style: const TextStyle(fontSize: 12, color: kGrey)),
+                  _PctText(r.yearAverage, size: 12),
+                ]),
+              ]),
+            ),
+            _PctText(r.termAverage(term), size: 22),
+          ]),
+          if (subjectIds.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(spacing: 4, runSpacing: 4, children: [
+              for (final id in subjectIds)
+                _Pill(
+                  text: '${names[id] ?? 'Matière'} ${pctText(r.subjectAverage(id, term)!)}',
+                  color: r.subjectAverage(id, term)! < kPassPct ? kAbsentRed : kNavy,
+                  background: r.subjectAverage(id, term)! < kPassPct ? const Color(0xFFFDECEC) : const Color(0xFFEEF2F8),
+                ),
+            ]),
+          ],
+          for (final s in r.signals) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 4, runSpacing: 4, children: [
+              for (final x in s.signals)
+                _Pill(
+                  text: kSignalLabels[x] ?? x,
+                  color: x == 'CHUTE' ? const Color(0xFF8A5300) : kAbsentRed,
+                  background: x == 'CHUTE' ? const Color(0xFFFFF4E0) : const Color(0xFFFDECEC),
+                ),
+            ]),
+            const SizedBox(height: 3),
+            Text(s.summary, style: const TextStyle(fontSize: 12.5, color: Color(0xFF5C3A00))),
+            const SizedBox(height: 4),
+            if (s.alert == null)
+              const Text('Alerte calculée sur le téléphone : transmise à la direction et au tuteur à l’envoi des cotes.',
+                  style: TextStyle(fontSize: 11.5, color: kGrey))
+            else
+              Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (s.alert!['smsStatus'] == 'SENT')
+                  const Text('✉ Tuteur prévenu par SMS', style: TextStyle(fontSize: 12, color: kPresentGreen, fontWeight: FontWeight.w600)),
+                if (s.alert!['status'] == 'ACKNOWLEDGED')
+                  Text(
+                    '✓ Suivi${s.alert!['acknowledgedBy'] != null ? ' par ${s.alert!['acknowledgedBy']}' : ''}${s.alert!['note'] != null ? ' — ${s.alert!['note']}' : ''}',
+                    style: const TextStyle(fontSize: 12, color: kPresentGreen, fontWeight: FontWeight.w600),
+                  )
+                else
+                  OutlinedButton.icon(
+                    key: ValueKey('ack-${s.alert!['id']}'),
+                    onPressed: _busyAlert == s.alert!['id'] || !c.sync.online ? null : () => _acknowledge(s.alert!, r.student),
+                    icon: const Icon(Icons.check, size: 18),
+                    label: Text(_busyAlert == s.alert!['id'] ? 'Envoi…' : 'Élève pris en charge'),
+                  ),
+              ]),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+class _PctText extends StatelessWidget {
+  const _PctText(this.value, {this.size = 14});
+  final double? value;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = value;
+    return Text(
+      v == null ? '—' : pctText(v),
+      style: TextStyle(fontSize: size, fontWeight: FontWeight.w700, color: v == null ? kGrey : (v < kPassPct ? kAbsentRed : kPresentGreen)),
+    );
+  }
+}
+
+class _StatBox extends StatelessWidget {
+  const _StatBox({required this.label, required this.child});
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE2E8F0))),
+          child: Column(children: [
+            FittedBox(child: child),
+            const SizedBox(height: 2),
+            Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: kGrey)),
+          ]),
+        ),
+      );
+}
+
+class _Pill extends StatelessWidget {
+  const _Pill({required this.text, required this.color, required this.background});
+  final String text;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(999)),
+        child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+      );
+}
+
+/// Fenêtre « Élève pris en charge » : renvoie la note saisie (vide possible), ou null si annulée.
+class _AckDialog extends StatefulWidget {
+  const _AckDialog({required this.studentName, required this.summary});
+  final String studentName;
+  final String summary;
+
+  @override
+  State<_AckDialog> createState() => _AckDialogState();
+}
+
+class _AckDialogState extends State<_AckDialog> {
+  final _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Élève pris en charge'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.studentName, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(widget.summary, style: const TextStyle(fontSize: 13, color: kGrey)),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('ack-note'),
+              controller: _note,
+              maxLength: 300,
+              maxLines: 3,
+              minLines: 2,
+              decoration: const InputDecoration(labelText: 'Suite donnée (facultatif)', hintText: 'Parent convoqué, remédiation…'),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
+          FilledButton(onPressed: () => Navigator.pop(context, _note.text.trim()), child: const Text('Marquer comme suivi')),
+        ],
+      );
+}

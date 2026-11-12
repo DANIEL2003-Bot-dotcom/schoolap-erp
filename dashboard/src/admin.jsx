@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { StudentPerformance } from './performance.jsx';
 import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, formatPhone, formatShortDate, isStrongPassword, normalizePhone, todayIso } from './lib.js';
 import { PasswordInput } from './ui.jsx';
 import { useIsMobile } from './mobile.jsx';
@@ -456,6 +457,10 @@ function StudentDetail({ api, studentId, onClose, onEdit, canEditFees, notify, o
                 <span>Reste à payer sur {formatMoney(t.due, cur)}</span>
               </div>
             ))}
+          </div>
+          <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Résultats scolaires (moyennes)</h4>
+          <div style={{ marginBottom: 16 }}>
+            <StudentPerformance performance={data.performance} />
           </div>
           <h4 style={{ margin: '8px 0', color: 'var(--navy-900)' }}>Frais scolaires</h4>
           {data.fees.length === 0 ? (

@@ -3,7 +3,7 @@ import { studentFullName } from '../utils/names.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
-export function createDashboardService({ prisma, fees, timezone = 'Africa/Lubumbashi' }) {
+export function createDashboardService({ prisma, fees, performance = null, timezone = 'Africa/Lubumbashi' }) {
   return {
     async summary(user, dateIso) {
       await fees.refreshStatuses();
@@ -12,7 +12,7 @@ export function createDashboardService({ prisma, fees, timezone = 'Africa/Lubumb
       const dayRange = zonedDayRange(dateIso, timezone); // journée civile à Goma/Lubumbashi, pas en UTC
       const schoolId = user.schoolId;
 
-      const [school, classes, groups, absents, feeTotals, insolvents, smsToday] = await Promise.all([
+      const [school, classes, groups, absents, feeTotals, insolvents, smsToday, performanceAlerts] = await Promise.all([
         prisma.school.findUnique({ where: { id: schoolId } }),
         prisma.class.findMany({
           where: { schoolId },
@@ -72,6 +72,7 @@ export function createDashboardService({ prisma, fees, timezone = 'Africa/Lubumb
           },
         }),
         prisma.smsLog.count({ where: { student: { schoolId }, createdAt: { gte: dayRange.start, lt: dayRange.end } } }),
+        performance ? performance.schoolOverview(user) : Promise.resolve({ openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] }),
       ]);
 
       const perClass = new Map(classes.map((c) => [c.id, { present: 0, absent: 0 }]));
@@ -118,6 +119,7 @@ export function createDashboardService({ prisma, fees, timezone = 'Africa/Lubumb
         },
         finance,
         smsSentToday: smsToday,
+        performanceAlerts,
         absents: absents.map((a) => ({
           attendanceId: a.id,
           studentId: a.student.id,

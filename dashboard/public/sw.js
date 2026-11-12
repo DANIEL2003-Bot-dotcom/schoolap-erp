@@ -3,7 +3,7 @@
    - Fichiers de l'application (noms versionnés) : copie locale d'abord
    - Appels à l'API : jamais mis en cache ici (les derniers chiffres sont gardés par l'application)
    - L'Espace Enseignant (/enseignant/) a son propre service worker : il n'est jamais intercepté ici */
-const CACHE = 'schoolap-direction-v1';
+const CACHE = 'schoolap-direction-v2';
 const SHELL = ['./', './manifest.webmanifest', './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png'];
 
 const scopeUrl = () => new URL('./', self.registration.scope);

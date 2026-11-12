@@ -1,7 +1,7 @@
 // =============================================================================
 //  ERP SCOLAIRE RDC — Schéma Prisma (PostgreSQL)
 //  Entités : School, Office, User, Class, Student, Subject, Attendance, Grade,
-//            SchoolFee, Transaction, SmsLog
+//            SchoolFee, Transaction, SmsLog, PerformanceAlert
 // =============================================================================
 
 generator client {
@@ -123,6 +123,25 @@ enum SmsType {
   ABSENCE_ALERT
   FEE_REMINDER
   PAYMENT_RECEIPT
+  PERFORMANCE_ALERT
+}
+
+/// Signaux de baisse des résultats (seuil de réussite EPST : 50 %)
+enum AlertSignal {
+  ECHECS_CONSECUTIFS /// deux cotes de suite sous 50 % dans la matière
+  FAIBLE /// moyenne du trimestre en cours sous 50 % (au moins 2 cotes)
+  CHUTE /// dernière cote au moins 10 points sous la moyenne précédente (ou moyenne générale en baisse d'un trimestre à l'autre)
+}
+
+enum AlertStatus {
+  ACTIVE /// baisse détectée, à traiter
+  ACKNOWLEDGED /// prise en charge (élève recadré, parent rencontré…)
+  RESOLVED /// les résultats sont remontés : fermée automatiquement
+}
+
+enum AlertSmsStatus {
+  SENT /// SMS envoyé au tuteur à l'ouverture de l'alerte
+  SKIPPED_RECENT /// un SMS de résultats a déjà été envoyé dans les dernières 24 h
 }
 
 enum SmsStatus {
@@ -149,6 +168,7 @@ model School {
   classes  Class[]
   students Student[]
   subjects Subject[]
+  alerts   PerformanceAlert[]
 
   @@map("schools")
 }
@@ -187,6 +207,7 @@ model User {
   classesTaught    Class[]      @relation("ClassTeacher")
   attendanceMarked Attendance[] @relation("AttendanceRecordedBy")
   gradesEntered    Grade[]      @relation("GradeEnteredBy")
+  alertsHandled    PerformanceAlert[] @relation("AlertAcknowledgedBy")
 
   @@index([schoolId, role])
   @@index([officeId])
@@ -236,6 +257,7 @@ model Student {
   fees         SchoolFee[]
   transactions Transaction[]
   smsLogs      SmsLog[]
+  alerts       PerformanceAlert[]
 
   @@index([classId])
   @@index([schoolId, lastName])
@@ -251,6 +273,7 @@ model Subject {
 
   school School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   grades Grade[]
+  alerts PerformanceAlert[]
 
   @@unique([schoolId, name])
   @@map("subjects")
@@ -381,4 +404,38 @@ model SmsLog {
 
   @@index([studentId, type, createdAt])
   @@map("sms_logs")
+}
+
+/// Alerte de baisse des résultats d'un élève, par matière (ou moyenne générale si subjectId est vide).
+/// Une seule alerte ouverte (ACTIVE ou ACKNOWLEDGED) par élève et par matière : index unique partiel
+/// créé dans la migration 20261028000000_alertes_resultats (non exprimable dans le schéma Prisma).
+model PerformanceAlert {
+  id               String          @id @default(uuid()) @db.Uuid
+  schoolId         String          @map("school_id") @db.Uuid
+  studentId        String          @map("student_id") @db.Uuid
+  subjectId        String?         @map("subject_id") @db.Uuid
+  term             Term
+  signals          AlertSignal[]
+  status           AlertStatus     @default(ACTIVE)
+  averagePct       Decimal?        @map("average_pct") @db.Decimal(5, 2) /// moyenne du trimestre (matière ou générale)
+  lastPct          Decimal?        @map("last_pct") @db.Decimal(5, 2) /// dernière cote, en %
+  referencePct     Decimal?        @map("reference_pct") @db.Decimal(5, 2) /// moyenne précédente servant de comparaison
+  summary          String /// explication lisible : « Mathématiques : moyenne T2 42 % (sous 50 %) · … »
+  smsStatus        AlertSmsStatus? @map("sms_status")
+  smsSentAt        DateTime?       @map("sms_sent_at")
+  acknowledgedById String?         @map("acknowledged_by_id") @db.Uuid
+  acknowledgedAt   DateTime?       @map("acknowledged_at")
+  note             String? /// suite donnée : « parent convoqué », « remédiation »…
+  resolvedAt       DateTime?       @map("resolved_at")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  school         School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject        Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  acknowledgedBy User?    @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, status])
+  @@index([studentId, status])
+  @@map("performance_alerts")
 }

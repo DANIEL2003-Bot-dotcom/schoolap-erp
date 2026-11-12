@@ -175,7 +175,12 @@ L'adresse du serveur peut aussi être changée plus tard sur l'écran de connexi
 3. **Terminal de l'API** : les SMS simulés s'affichent, par exemple `Alerte École : Votre enfant … a été marqué ABSENT ce 24/10/2026.`
 4. **Tableau de bord** : cliquez sur « Actualiser ». Le taux de présence change et les absents portent le badge **« SMS envoyé »**.
 5. **Comptabilité** : dans « Insolvables », cliquez sur **« Encaisser »**, choisissez M-Pesa, Orange ou Airtel, puis validez. Au bout de quelques secondes, la confirmation simulée de l'opérateur met à jour le solde.
-6. **Gestion** : onglet **Élèves**, puis **« + Inscrire un élève »** ou **« Importer CSV »**. Un modèle de fichier est téléchargeable dans la fenêtre d'import.
+6. **Moyennes et alertes** : dans l'onglet **Cotes**, saisissez pour un même élève 16 puis 15 (Interrogation 1 et 2), puis 7 (Devoir).
+   - La moyenne de l'élève s'affiche sous son nom.
+   - L'onglet **Moyennes** le signale « Baisse des résultats ».
+   - Le terminal de l'API affiche le SMS **ALERTE RÉSULTATS SCOLAIRES** envoyé au tuteur, une seule fois.
+   - Le tableau de bord le montre dans **« Élèves en difficulté »**. La Direction peut le marquer « pris en charge » avec une note.
+7. **Gestion** : onglet **Élèves**, puis **« + Inscrire un élève »** ou **« Importer CSV »**. Un modèle de fichier est téléchargeable dans la fenêtre d'import.
 
 ### A6. Lancer les tests (facultatif)
 

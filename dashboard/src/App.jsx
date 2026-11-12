@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ADMIN_CSS, ADMIN_TABS, AdminView } from './admin.jsx';
+import { PERF_CSS, PerformanceCard } from './performance.jsx';
 import {
   API_URL,
   OPERATORS,
@@ -76,6 +77,8 @@ function createLiveApi(token, onSlow) {
   return {
     summary: (date) => apiFetch(`/api/dashboard/summary?date=${date}`, { token, onSlow }),
     remind: (feeId) => apiFetch(`/api/fees/${feeId}/remind`, { token, method: 'POST', onSlow }),
+    acknowledgeAlert: (alertId, note) =>
+      apiFetch(`/api/dashboard/performance-alerts/${alertId}/acknowledge`, { token, method: 'POST', body: note ? { note } : {}, onSlow }),
     initiatePayment: (body) => apiFetch('/api/payments/mobile-money', { token, method: 'POST', body, onSlow }),
     paymentStatus: (transactionId) => apiFetch(`/api/payments/mobile-money/${encodeURIComponent(transactionId)}`, { token }),
   };
@@ -824,7 +827,7 @@ function Dashboard({ session, onLogout }) {
                     usd ? `${formatMoney(usd.paid)} encaissés sur ${formatMoney(usd.due)} exigibles${cdf ? ` · ${formatPct(cdf.recoveryRate)} en FC` : ''}` : 'Aucun frais exigible'
                   }
                 />
-                <Kpi tone="grey" label="SMS envoyés" value={data.smsSentToday} foot="Alertes d’absence, relances et reçus du jour" />
+                <Kpi tone="grey" label="SMS envoyés" value={data.smsSentToday} foot="Absences, résultats, relances et reçus du jour" />
               </>
             )}
           </section>
@@ -945,6 +948,16 @@ function Dashboard({ session, onLogout }) {
               </div>
             </section>
           </div>
+
+          <PerformanceCard
+            data={data ? data.performanceAlerts ?? { openCount: 0, studentsCount: 0, pendingStudents: 0, alerts: [] } : null}
+            api={api}
+            notify={notify}
+            onLogout={onLogout}
+            onChanged={() => load(true)}
+            mobile={mobile}
+            limit={MOBILE_LIST_LIMIT}
+          />
 
           <section className="card" aria-labelledby="ins-title">
             <div className="card-head">
@@ -1250,7 +1263,7 @@ export default function App() {
 
   return (
     <>
-      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + MOBILE_CSS}</style>
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + MOBILE_CSS}</style>
       {content}
     </>
   );

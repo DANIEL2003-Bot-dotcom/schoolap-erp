@@ -14,7 +14,7 @@ const id = (req) => parseOrThrow(idParam, req.params).id;
  *  - MANAGE_STUDENTS : inscriptions et import (+ D.E., Comptable)
  *  - MANAGE_FEES     : frais et remises (Admin, Préfet, Directeur, Comptable)
  */
-export function adminRouter({ prisma, config, adminService }) {
+export function adminRouter({ prisma, config, adminService, performanceService }) {
   const router = Router();
   const staff = requirePermission('MANAGE_STAFF');
   const academic = requirePermission('MANAGE_ACADEMIC');
@@ -39,7 +39,11 @@ export function adminRouter({ prisma, config, adminService }) {
     const result = await adminService.importStudents(req.user, req.body);
     res.status(result.dryRun ? 200 : 201).json({ success: true, ...result });
   });
-  router.get('/students/:id', async (req, res) => res.json({ success: true, ...(await adminService.getStudent(req.user, id(req))) }));
+  router.get('/students/:id', async (req, res) => {
+    const detail = await adminService.getStudent(req.user, id(req));
+    const performance = await performanceService.studentPerformance(detail.student.id);
+    res.json({ success: true, ...detail, performance });
+  });
   router.post('/students', students, async (req, res) => res.status(201).json({ success: true, ...(await adminService.createStudent(req.user, req.body)) }));
   router.patch('/students/:id', students, async (req, res) => res.json({ success: true, ...(await adminService.updateStudent(req.user, id(req), req.body)) }));
 

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { badRequest } from '../utils/httpError.js';
 import { accessibleClassIds } from './access.js';
 import { MAX_BATCH } from './attendance.js';
+import { logger } from '../utils/logger.js';
 
 const twoDecimals = (v) => Math.abs(Math.round(v * 100) - v * 100) < 1e-6;
 
@@ -24,7 +25,7 @@ const recordSchema = z
 const toNumber = (d) => (d == null ? null : Number(d));
 const isUniqueViolation = (e) => e?.code === 'P2002';
 
-export function createGradesService({ prisma }) {
+export function createGradesService({ prisma, performance = null }) {
   async function upsertLastWriteWins(record, user, clientUpdatedAt) {
     const key = {
       studentId_subjectId_term_evaluation: {
@@ -149,6 +150,19 @@ export function createGradesService({ prisma }) {
       }
 
       const all = [...results, ...rejected].sort((a, b) => a.index - b.index);
+
+      // Suivi des résultats : recalcul des moyennes et alertes des élèves dont une cote a changé.
+      let alerts = { opened: 0, updated: 0, resolved: 0, smsSent: 0, alerts: [] };
+      const changed = results.filter((r) => r.result === 'created' || r.result === 'updated').map((r) => r.studentId);
+      if (performance && changed.length) {
+        try {
+          alerts = await performance.evaluateStudents(changed);
+        } catch (err) {
+          // Les cotes sont enregistrées : une erreur d'analyse ne doit pas faire échouer la synchronisation.
+          logger.error('Analyse des résultats impossible après synchronisation', { error: err.message });
+        }
+      }
+
       return {
         summary: {
           received: records.length,
@@ -160,6 +174,13 @@ export function createGradesService({ prisma }) {
           stale: all.filter((r) => r.result === 'stale').length,
         },
         results: all,
+        alerts: {
+          opened: alerts.opened,
+          updated: alerts.updated,
+          resolved: alerts.resolved,
+          smsSent: alerts.smsSent,
+          newAlerts: alerts.alerts,
+        },
       };
     },
   };
