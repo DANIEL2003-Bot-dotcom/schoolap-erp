@@ -5,6 +5,7 @@ import { PASSWORD_HINT, ROLE_LABELS, apiFetch, can, formatMoney, formatPct, form
 import { Field, Modal, PasswordInput, fieldErrors, useAsync } from './ui.jsx';
 import { useIsMobile } from './mobile.jsx';
 import { PaidPercent, StandingBadge, StandingBanner, ThresholdSetting } from './standing.jsx';
+import { WhatsAppTab } from './whatsapp.jsx';
 
 /* =============================================================================
    Gestion administrative — structure EPST
@@ -43,7 +44,7 @@ const TX_STATUS = {
 };
 const OPERATOR_NAMES = { MPESA: 'M-Pesa', ORANGE_MONEY: 'Orange Money', AIRTEL_MONEY: 'Airtel Money' };
 const CSV_TEMPLATE =
-  'nom;postnom;prenom;sexe;telephone_tuteur;nom_tuteur;matricule\n' + 'Mumbere;Kakule;Fiston;M;0971112233;Papa Mumbere;\n' + 'Kahambu;Vagheni;Aline;F;0841112233;Maman Kahambu;\n';
+  'nom;postnom;prenom;sexe;telephone_tuteur;nom_tuteur;matricule;whatsapp\n' + 'Mumbere;Kakule;Fiston;M;0971112233;Papa Mumbere;;oui\n' + 'Kahambu;Vagheni;Aline;F;0841112233;Maman Kahambu;;non\n';
 
 export const ADMIN_CSS = `
 .offices{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:14px 16px 16px}
@@ -135,6 +136,7 @@ const EMPTY_STUDENT = {
   gender: 'F',
   guardianName: '',
   guardianPhone: '',
+  guardianWhatsapp: true,
   matricule: '',
   classId: '',
   applyClassFees: true,
@@ -145,7 +147,7 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
   const editing = Boolean(student);
   const [form, setForm] = useState(() =>
     editing
-      ? { ...EMPTY_STUDENT, ...student, guardianName: student.guardianName ?? '', guardianPhone: formatPhone(student.guardianPhone) }
+      ? { ...EMPTY_STUDENT, ...student, guardianName: student.guardianName ?? '', guardianPhone: formatPhone(student.guardianPhone), guardianWhatsapp: student.guardianWhatsapp !== false }
       : { ...EMPTY_STUDENT, classId: defaultClassId || classes[0]?.id || '' },
   );
   const [errors, setErrors] = useState({});
@@ -167,6 +169,7 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
       gender: form.gender,
       guardianName: form.guardianName || null,
       guardianPhone: form.guardianPhone,
+      guardianWhatsapp: form.guardianWhatsapp,
       classId: form.classId,
     };
     const res = await run(
@@ -224,7 +227,7 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
           <Field id="s-gname" label="Nom du tuteur" error={errors.guardianName}>
             <input id="s-gname" value={form.guardianName} onChange={set('guardianName')} placeholder="Facultatif" />
           </Field>
-          <Field id="s-gphone" label="Téléphone du tuteur (SMS)" error={errors.guardianPhone} hint="Reçoit les alertes d’absence et les relances.">
+          <Field id="s-gphone" label="Téléphone du tuteur" error={errors.guardianPhone} hint="Reçoit les absences, alertes de résultats, reçus et relances.">
             <input
               id="s-gphone"
               value={form.guardianPhone}
@@ -247,6 +250,9 @@ function StudentForm({ api, classes, student, defaultClassId, onClose, onSaved, 
             <input id="s-mat" value={form.matricule} onChange={set('matricule')} placeholder={editing ? '' : 'Automatique'} />
           </Field>
         </div>
+        <label className="switch-line">
+          <input type="checkbox" checked={form.guardianWhatsapp} onChange={set('guardianWhatsapp')} /> Le tuteur a WhatsApp sur ce numéro (décocher : messages par SMS)
+        </label>
         {editing ? (
           <label className="switch-line">
             <input type="checkbox" checked={form.isActive} onChange={set('isActive')} /> Élève inscrit (décocher pour désinscrire — l’historique est conservé)
@@ -633,7 +639,7 @@ function ImportModal({ api, classes, defaultClassId, onClose, onDone, notify, on
       }
     >
       <div className="alert alert-info">
-        Une ligne par élève, séparateur « ; » ou « , ». Colonnes : <b>nom ; postnom ; prenom ; sexe (M/F) ; telephone_tuteur</b> ; nom_tuteur et matricule facultatifs. L’import est
+        Une ligne par élève, séparateur « ; » ou « , ». Colonnes : <b>nom ; postnom ; prenom ; sexe (M/F) ; telephone_tuteur</b> ; nom_tuteur, matricule et whatsapp (oui/non, oui par défaut) facultatifs. L’import est
         « tout ou rien » : s’il reste une erreur, aucun élève n’est créé.{' '}
         <a href={templateHref} download="modele-import-eleves.csv">
           Télécharger le modèle
@@ -1648,6 +1654,7 @@ export function adminTabsFor(user) {
   tabs.push({ id: 'students', label: 'Élèves', short: 'Élèves', icon: 'students' });
   if (can(user, 'VIEW_ACADEMIC') || can(user, 'MANAGE_ACADEMIC') || can(user, 'MANAGE_STAFF')) tabs.push({ id: 'classes', label: 'Classes & personnel', short: 'Classes', icon: 'classes' });
   tabs.push({ id: 'fees', label: 'Frais', short: 'Frais', icon: 'fees' });
+  if (can(user, 'MANAGE_SETTINGS')) tabs.push({ id: 'whatsapp', label: 'WhatsApp', short: 'WhatsApp', icon: 'whatsapp' });
   return tabs;
 }
 
@@ -1679,6 +1686,7 @@ export function AdminView({ tab, session, notify, onLogout, onSlow }) {
   useEffect(reload, [reload]);
 
   // La caisse ne dépend pas du référentiel : elle s'affiche sans attendre la vue d'ensemble.
+  if (tab === 'whatsapp' && perms.settings) return <WhatsAppTab session={session} notify={notify} onLogout={onLogout} onSlow={onSlow} />;
   if (tab === 'cashbook' && perms.collect) return <CashbookTab session={session} perms={perms} notify={notify} onLogout={onLogout} onSlow={onSlow} />;
   if (error && !overview) return <div className="alert alert-error">{error}</div>;
   if (!overview) return <div className="skeleton" style={{ height: 320 }} />;

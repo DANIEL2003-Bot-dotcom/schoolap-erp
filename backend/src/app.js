@@ -19,10 +19,16 @@ import { createGradesService } from './services/grades.js';
 import { createMobileMoneyService } from './services/mobileMoney.js';
 import { createPerformanceService } from './services/performance.js';
 import { createSmsService } from './services/sms.js';
+import { createMessagingService } from './services/messaging.js';
+import { createWhatsAppService } from './services/whatsapp.js';
+import { whatsappRouter } from './routes/whatsapp.js';
 import { logger } from './utils/logger.js';
 
 export function createApp({ prisma, config, overrides = {} }) {
-  const sms = overrides.sms ?? createSmsService({ prisma, config, print: overrides.smsPrint });
+  const smsGateway = overrides.sms ?? createSmsService({ prisma, config, print: overrides.smsPrint });
+  const whatsappService = createWhatsAppService({ prisma, config, fetchImpl: overrides.whatsappFetch, print: overrides.smsPrint });
+  // Tous les messages aux tuteurs passent par ce service : WhatsApp si relié et accepté par le tuteur, sinon SMS.
+  const sms = createMessagingService({ prisma, config, sms: smsGateway, whatsapp: whatsappService });
   const feesService = createFeesService({ prisma, sms, config });
   const attendanceService = createAttendanceService({ prisma, sms, config });
   const performanceService = createPerformanceService({ prisma, sms });
@@ -37,6 +43,7 @@ export function createApp({ prisma, config, overrides = {} }) {
     performance: performanceService,
     finance: financeService,
     eligibility: eligibilityService,
+    messaging: sms,
     timezone: config.timezone,
   });
 
@@ -88,7 +95,7 @@ export function createApp({ prisma, config, overrides = {} }) {
   });
 
   const sync = syncRouters({ prisma, config, attendanceService, gradesService });
-  const admin = dashboardRouters({ prisma, config, dashboardService, feesService, performanceService });
+  const admin = dashboardRouters({ prisma, config, dashboardService, feesService, performanceService, messagingService: sms });
 
   app.use('/api/auth', authRouter({ prisma, config }));
   app.use('/api/teacher', teacherRouter({ prisma, config, performanceService, eligibilityService }));
@@ -98,10 +105,11 @@ export function createApp({ prisma, config, overrides = {} }) {
   app.use('/api/finance', financeRouter({ prisma, config, financeService }));
   app.use('/api/dashboard', admin.dashboard);
   app.use('/api/fees', admin.fees);
-  app.use('/api/admin', adminRouter({ prisma, config, adminService, performanceService, eligibilityService }));
+  app.use('/api/admin', adminRouter({ prisma, config, adminService, performanceService, eligibilityService, messagingService: sms }));
+  app.use('/api/whatsapp', whatsappRouter({ whatsappService }));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  return { app, services: { sms, financeService, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService, eligibilityService } };
+  return { app, services: { sms, whatsappService, financeService, performanceService, adminService, feesService, attendanceService, gradesService, mobileMoneyService, dashboardService, eligibilityService } };
 }

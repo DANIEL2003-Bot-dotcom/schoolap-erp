@@ -149,13 +149,23 @@ enum AlertStatus {
 }
 
 enum AlertSmsStatus {
-  SENT /// SMS envoyé au tuteur à l'ouverture de l'alerte
+  SENT /// tuteur prévenu (WhatsApp ou SMS) à l'ouverture de l'alerte
   SKIPPED_RECENT /// un SMS de résultats a déjà été envoyé dans les dernières 24 h
+  FAILED /// message WhatsApp non distribué (signalé à la Direction)
 }
 
+/// État d'un message au tuteur. DELIVERED et READ sont remontés par WhatsApp (accusés de réception et de lecture).
 enum SmsStatus {
   SENT
+  DELIVERED
+  READ
   FAILED
+}
+
+/// Canal utilisé pour prévenir le tuteur
+enum MessageChannel {
+  SMS
+  WHATSAPP
 }
 
 // -----------------------------------------------------------------------------
@@ -163,16 +173,16 @@ enum SmsStatus {
 // -----------------------------------------------------------------------------
 
 model School {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  province  Province
-  epstCode  String   @unique @map("epst_code")
-  city      String?
-  phone     String?
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String
+  province             Province
+  epstCode             String   @unique @map("epst_code")
+  city                 String?
+  phone                String?
   /// Pourcentage minimum des frais exigibles (échéance atteinte) à avoir payé pour être « en ordre » et suivre les cours (0 à 100).
-  eligibilityThreshold Int @default(50) @map("eligibility_threshold")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  eligibilityThreshold Int      @default(50) @map("eligibility_threshold")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   users           User[]
   offices         Office[]
@@ -222,6 +232,7 @@ model User {
   alertsHandled     PerformanceAlert[] @relation("AlertAcknowledgedBy")
   paymentsRecorded  Transaction[]      @relation("PaymentRecordedBy")
   paymentsCancelled Transaction[]      @relation("PaymentCancelledBy")
+  messagesHandled   SmsLog[]           @relation("MessageHandledBy")
 
   @@index([schoolId, role])
   @@index([officeId])
@@ -250,19 +261,20 @@ model Class {
 }
 
 model Student {
-  id            String   @id @default(uuid()) @db.Uuid
-  schoolId      String   @map("school_id") @db.Uuid
-  classId       String   @map("class_id") @db.Uuid
-  matricule     String   @unique
-  lastName      String   @map("last_name") /// Nom
-  middleName    String   @map("middle_name") /// Postnom
-  firstName     String   @map("first_name") /// Prénom
-  gender        Gender
-  guardianName  String?  @map("guardian_name")
-  guardianPhone String   @map("guardian_phone") /// Téléphone du tuteur, format E.164 +243XXXXXXXXX
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(uuid()) @db.Uuid
+  schoolId         String   @map("school_id") @db.Uuid
+  classId          String   @map("class_id") @db.Uuid
+  matricule        String   @unique
+  lastName         String   @map("last_name") /// Nom
+  middleName       String   @map("middle_name") /// Postnom
+  firstName        String   @map("first_name") /// Prénom
+  gender           Gender
+  guardianName     String?  @map("guardian_name")
+  guardianPhone    String   @map("guardian_phone") /// Téléphone du tuteur, format E.164 +243XXXXXXXXX
+  guardianWhatsapp Boolean  @default(true) @map("guardian_whatsapp") /// Le tuteur accepte les messages de l'école sur WhatsApp (sinon : SMS)
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   school       School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   class        Class              @relation(fields: [classId], references: [id], onDelete: Restrict)
@@ -437,18 +449,28 @@ model ReceiptCounter {
 // -----------------------------------------------------------------------------
 
 model SmsLog {
-  id         String    @id @default(uuid()) @db.Uuid
-  studentId  String?   @map("student_id") @db.Uuid
-  phone      String
-  message    String
-  type       SmsType
-  status     SmsStatus
-  providerId String?   @map("provider_id")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id          String         @id @default(uuid()) @db.Uuid
+  studentId   String?        @map("student_id") @db.Uuid
+  phone       String
+  message     String
+  type        SmsType
+  channel     MessageChannel @default(SMS)
+  status      SmsStatus
+  providerId  String?        @map("provider_id") /// Identifiant chez le fournisseur (wamid WhatsApp, référence SMS)
+  error       String? /// Motif de l'échec renvoyé par le fournisseur
+  deliveredAt DateTime?      @map("delivered_at")
+  readAt      DateTime?      @map("read_at")
+  handledAt   DateTime?      @map("handled_at") /// Échec traité par l'école (parent appelé)
+  handledById String?        @map("handled_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
 
-  student Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  handledBy User?    @relation("MessageHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
 
   @@index([studentId, type, createdAt])
+  @@index([providerId])
+  @@index([status, createdAt])
   @@map("sms_logs")
 }
 

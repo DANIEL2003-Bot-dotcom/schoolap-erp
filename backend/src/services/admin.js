@@ -89,6 +89,7 @@ const studentBase = {
   gender: z.enum(['M', 'F'], { error: 'Sexe : M ou F.' }),
   guardianName: optionalText(120),
   guardianPhone: phoneField,
+  guardianWhatsapp: z.boolean({ error: 'WhatsApp : oui ou non.' }).default(true),
 };
 const studentSchema = z.object({
   ...studentBase,
@@ -104,6 +105,7 @@ const studentPatchSchema = z
     gender: studentBase.gender.optional(),
     guardianName: studentBase.guardianName.optional(),
     guardianPhone: studentBase.guardianPhone.optional(),
+    guardianWhatsapp: z.boolean({ error: 'WhatsApp : oui ou non.' }).optional(),
     classId: z.uuid().optional(),
     matricule: trimmed('Le matricule', 40).optional(),
     isActive: z.boolean().optional(),
@@ -157,6 +159,8 @@ const HEADER_ALIASES = {
   tel_tuteur: 'guardianPhone',
   nom_tuteur: 'guardianName',
   tuteur: 'guardianName',
+  whatsapp: 'guardianWhatsapp',
+  whatsapp_tuteur: 'guardianWhatsapp',
   matricule: 'matricule',
 };
 const REQUIRED_COLUMNS = ['lastName', 'middleName', 'firstName', 'gender', 'guardianPhone'];
@@ -218,6 +222,13 @@ export function parseStudentsCsv(text) {
     columns.forEach((c, idx) => {
       if (c) raw[c] = values[idx] ?? '';
     });
+    // Colonne facultative « whatsapp » : non / n / 0 → le tuteur reçoit les messages par SMS ; vide → WhatsApp.
+    if ('guardianWhatsapp' in raw) {
+      const w = normalizeHeader(String(raw.guardianWhatsapp));
+      if (w === '') delete raw.guardianWhatsapp;
+      else if (['non', 'n', '0', 'no', 'false', 'sms'].includes(w)) raw.guardianWhatsapp = false;
+      else if (['oui', 'o', '1', 'yes', 'y', 'true', 'whatsapp'].includes(w)) raw.guardianWhatsapp = true;
+    }
     if (typeof raw.gender === 'string') {
       const g = raw.gender.trim().toUpperCase();
       raw.gender = g.startsWith('F') ? 'F' : g.startsWith('M') || g.startsWith('G') ? 'M' : g;
@@ -311,6 +322,7 @@ export function createAdminService({ prisma, config, finance = null, eligibility
     gender: s.gender,
     guardianName: s.guardianName,
     guardianPhone: s.guardianPhone,
+    guardianWhatsapp: s.guardianWhatsapp,
     classId: s.classId,
     className: s.class?.name ?? null,
     isActive: s.isActive,
@@ -682,6 +694,7 @@ export function createAdminService({ prisma, config, finance = null, eligibility
               gender: input.gender,
               guardianName: input.guardianName,
               guardianPhone: input.guardianPhone,
+              guardianWhatsapp: input.guardianWhatsapp,
             },
             include: { class: { select: { name: true } } },
           });
@@ -747,6 +760,7 @@ export function createAdminService({ prisma, config, finance = null, eligibility
             gender: r.gender,
             guardianName: r.guardianName,
             guardianPhone: r.guardianPhone,
+            guardianWhatsapp: r.guardianWhatsapp,
           }));
           const created = await db.student.createManyAndReturn({ data, select: { id: true } });
           let feesCreated = 0;

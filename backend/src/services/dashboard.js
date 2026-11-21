@@ -4,7 +4,7 @@ import { can } from './roles.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
-export function createDashboardService({ prisma, fees, performance = null, finance: cashbook = null, eligibility = null, timezone = 'Africa/Lubumbashi' }) {
+export function createDashboardService({ prisma, fees, performance = null, finance: cashbook = null, eligibility = null, messaging = null, timezone = 'Africa/Lubumbashi' }) {
   return {
     async summary(user, dateIso) {
       await fees.refreshStatuses();
@@ -115,6 +115,11 @@ export function createDashboardService({ prisma, fees, performance = null, finan
         return amounts ? { currency: f.currency, due: round2(due), paid: round2(paid), outstanding: round2(due - paid), recoveryRate } : { currency: f.currency, recoveryRate };
       });
 
+      // Messages aux tuteurs : état WhatsApp de chaque alerte d'absence et échecs à traiter (sans le texte, qui peut contenir des montants).
+      const [absenceMessages, messages] = messaging
+        ? await Promise.all([messaging.absenceMessages(absents.map((a) => a.student.id), dateIso), messaging.dashboardBlock(schoolId, dateIso)])
+        : [new Map(), null];
+
       return {
         date: dateIso,
         generatedAt: new Date().toISOString(),
@@ -144,7 +149,12 @@ export function createDashboardService({ prisma, fees, performance = null, finan
           guardianPhone: a.student.guardianPhone,
           smsSent: Boolean(a.smsAlertSentAt),
           smsSentAt: a.smsAlertSentAt?.toISOString() ?? null,
+          message: (() => {
+            const m = absenceMessages.get(a.student.id);
+            return m ? { channel: m.channel, status: m.status, error: m.error, at: m.createdAt.toISOString() } : null;
+          })(),
         })),
+        messages,
         insolvents: insolvents === null ? null : insolvents.map((f) => ({
           feeId: f.id,
           studentId: f.student.id,

@@ -40,13 +40,13 @@ export async function resetDatabase(prisma) {
   });
 }
 
-/** Application de test : les SMS sont capturés au lieu d'être affichés. */
-export function buildApp(prisma, { config = testConfig(), dispatchWebhook } = {}) {
+/** Application de test : les SMS (et WhatsApp simulé) sont capturés au lieu d'être affichés ; whatsappFetch remplace l'API Meta. */
+export function buildApp(prisma, { config = testConfig(), dispatchWebhook, whatsappFetch } = {}) {
   const printed = [];
   const { app, services } = createApp({
     prisma,
     config,
-    overrides: { smsPrint: (text) => printed.push(text), dispatchWebhook },
+    overrides: { smsPrint: (text) => printed.push(text), dispatchWebhook, whatsappFetch },
   });
   return { app, services, config, printed };
 }

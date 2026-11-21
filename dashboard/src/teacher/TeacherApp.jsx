@@ -354,7 +354,7 @@ function Home({ session, bootstrap, sync, engine, refreshing, refreshError, onRe
         <div className="warn-card" role="status">
           <h2>⚠ {toHandle.length} élève(s) en difficulté</h2>
           <div className="muted" style={{ color: '#7A4A00' }}>
-            Résultats en baisse : intervenez avant la fin de l’année. Le tuteur est prévenu une fois par SMS à chaque nouvelle baisse.
+            Résultats en baisse : intervenez avant la fin de l’année. Le tuteur est prévenu une fois sur WhatsApp à chaque nouvelle baisse.
           </div>
           <ul>
             {toHandle.slice(0, 4).map((s) => (
@@ -497,7 +497,7 @@ function AttendanceScreen({ cls, engine, sync }) {
                   {s.matricule}
                   {s.feeOk === true && <span className="fee-tag ok">En ordre</span>}
                   {s.feeOk === false && <span className="fee-tag ko">Pas en ordre</span>}
-                  {e?.status === 'ABSENT' && e.smsStatus === 'sent' ? ' · SMS envoyé au tuteur' : ''}
+                  {e?.status === 'ABSENT' && e.smsStatus === 'sent' ? ' · tuteur prévenu' : ''}
                   {e?.sync === 'rejected' ? <span className="err-text"> · {e.error}</span> : null}
                 </small>
               </div>
@@ -522,7 +522,7 @@ function AttendanceScreen({ cls, engine, sync }) {
         </div>
       )}
       <p className="muted" style={{ textAlign: 'center' }}>
-        ☁ en attente · ✓ envoyé · un SMS est envoyé automatiquement au tuteur de chaque absent.
+        ☁ en attente · ✓ envoyé · le tuteur de chaque absent est prévenu automatiquement sur WhatsApp.
       </p>
     </main>
   );
@@ -823,7 +823,7 @@ function ResultsScreen({ cls, subjects, report, session, online, onAcknowledged 
                     <div style={{ marginTop: 3 }}>{s.summary}</div>
                     {s.server ? (
                       <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        {s.server.smsStatus === 'SENT' && <span className="followed">✉ Tuteur prévenu par SMS</span>}
+                        {s.server.smsStatus === 'SENT' && <span className="followed">✉ Tuteur prévenu</span>}
                         {s.server.status === 'ACKNOWLEDGED' ? (
                           <span className="followed">
                             ✓ Suivi{s.server.acknowledgedBy ? ` par ${s.server.acknowledgedBy}` : ''}

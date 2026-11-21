@@ -16,9 +16,9 @@ const id = (req) => parseOrThrow(idParam, req.params).id;
  *  - MANAGE_STUDENTS : inscriptions et import (+ D.E., Comptable)
  *  - MANAGE_FEES     : création et modification des frais, remises (Comptable et Admin)
  *  - VIEW_AMOUNTS    : montants (dû, payé, reste, paiements) ; les autres voient des pourcentages et « En ordre / Pas en ordre »
- *  - MANAGE_SETTINGS : seuil « en ordre » avec les frais (Admin)
+ *  - MANAGE_SETTINGS : seuil « en ordre » avec les frais, liaison WhatsApp (Admin)
  */
-export function adminRouter({ prisma, config, adminService, performanceService, eligibilityService }) {
+export function adminRouter({ prisma, config, adminService, performanceService, eligibilityService, messagingService }) {
   const router = Router();
   const staff = requirePermission('MANAGE_STAFF');
   const academic = requirePermission('MANAGE_ACADEMIC');
@@ -53,6 +53,12 @@ export function adminRouter({ prisma, config, adminService, performanceService, 
   router.patch('/students/:id', students, async (req, res) => res.json({ success: true, ...(await adminService.updateStudent(req.user, id(req), req.body)) }));
 
   router.patch('/settings', requirePermission('MANAGE_SETTINGS'), async (req, res) => res.json({ success: true, ...(await eligibilityService.updateSettings(req.user, req.body)) }));
+
+  // WhatsApp Business : état de la liaison Meta, soumission des modèles, message de test (Administrateur)
+  const settings = requirePermission('MANAGE_SETTINGS');
+  router.get('/whatsapp', settings, async (req, res) => res.json({ success: true, ...(await messagingService.adminStatus(req.user)) }));
+  router.post('/whatsapp/templates', settings, async (req, res) => res.json({ success: true, ...(await messagingService.submitTemplates(req.user)) }));
+  router.post('/whatsapp/test', settings, async (req, res) => res.json({ success: true, ...(await messagingService.sendTest(req.user, req.body)) }));
 
   router.get('/fees/summary', async (req, res) => res.json({ success: true, ...(await adminService.feeSummary(req.user)) }));
   router.post('/fees/bulk', fees, async (req, res) => res.status(201).json({ success: true, ...(await adminService.bulkCreateFees(req.user, req.body)) }));

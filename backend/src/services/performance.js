@@ -246,9 +246,17 @@ export function createPerformanceService({ prisma, sms }) {
       select: { id: true },
     });
     if (recent) return { status: 'SKIPPED_RECENT', at: null };
-    const message = buildParentSms(school.name, student, created.map((c) => c.smsPart));
-    const res = await sms.send({ studentId: student.id, phone: student.guardianPhone, message, type: 'PERFORMANCE_ALERT' });
-    return { status: 'SENT', at: res.sentAt };
+    const parts = created.map((c) => c.smsPart);
+    const message = buildParentSms(school.name, student, parts);
+    const name = [student.firstName, student.lastName?.toUpperCase()].filter(Boolean).join(' ');
+    const res = await sms.send({
+      studentId: student.id,
+      phone: student.guardianPhone,
+      message,
+      type: 'PERFORMANCE_ALERT',
+      template: { name: 'schoolap_resultats', params: [name, parts.join(', ')] },
+    });
+    return { status: res.status === 'failed' ? 'FAILED' : 'SENT', at: res.sentAt };
   }
 
   return {

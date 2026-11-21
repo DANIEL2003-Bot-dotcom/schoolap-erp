@@ -19,6 +19,15 @@ const schema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).default(1),
   SMS_SENDER_ID: z.string().max(11).default('ECOLE-RDC'),
   LOG_REQUESTS: bool.default('true'),
+  // WhatsApp Business (API Cloud de Meta). Sans jeton ni identifiant de numéro : messages par SMS.
+  WHATSAPP_ACCESS_TOKEN: z.string().trim().optional(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().trim().regex(/^\d*$/, 'WHATSAPP_PHONE_NUMBER_ID : chiffres uniquement').optional(),
+  WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().trim().regex(/^\d*$/, 'WHATSAPP_BUSINESS_ACCOUNT_ID : chiffres uniquement').optional(),
+  WHATSAPP_APP_SECRET: z.string().trim().optional(),
+  WHATSAPP_VERIFY_TOKEN: z.string().trim().optional(),
+  WHATSAPP_API_VERSION: z.string().regex(/^v\d+\.\d+$/, 'WHATSAPP_API_VERSION : format v26.0').default('v26.0'),
+  WHATSAPP_TEMPLATE_LANGUAGE: z.string().default('fr'),
+  WHATSAPP_SIMULATE: bool.default(false), // zod v4 : la valeur par défaut n'est pas transformée, d'où un booléen
 });
 
 export function loadConfig(env = process.env) {
@@ -48,5 +57,16 @@ export function loadConfig(env = process.env) {
     trustProxy: e.TRUST_PROXY,
     smsSenderId: e.SMS_SENDER_ID,
     logRequests: e.LOG_REQUESTS,
+    whatsapp: Object.freeze({
+      accessToken: e.WHATSAPP_ACCESS_TOKEN || null,
+      phoneNumberId: e.WHATSAPP_PHONE_NUMBER_ID || null,
+      businessAccountId: e.WHATSAPP_BUSINESS_ACCOUNT_ID || null,
+      appSecret: e.WHATSAPP_APP_SECRET || null,
+      verifyToken: e.WHATSAPP_VERIFY_TOKEN || null,
+      apiVersion: e.WHATSAPP_API_VERSION,
+      language: e.WHATSAPP_TEMPLATE_LANGUAGE,
+      // live : envoi réel via Meta ; simulation : affichage console (développement) ; off : SMS uniquement
+      mode: e.WHATSAPP_ACCESS_TOKEN && e.WHATSAPP_PHONE_NUMBER_ID ? 'live' : e.WHATSAPP_SIMULATE ? 'simulation' : 'off',
+    }),
   });
 }

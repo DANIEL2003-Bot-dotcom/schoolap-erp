@@ -9,9 +9,10 @@ const querySchema = z.object({
 });
 const alertParams = z.object({ alertId: z.uuid({ error: 'Identifiant d’alerte invalide.' }) });
 const feeParams = z.object({ feeId: z.uuid({ error: 'Identifiant de frais invalide.' }) });
+const messageParams = z.object({ messageId: z.uuid({ error: 'Identifiant de message invalide.' }) });
 
 /** Routes du tableau de bord de la direction. */
-export function dashboardRouters({ prisma, config, dashboardService, feesService, performanceService }) {
+export function dashboardRouters({ prisma, config, dashboardService, feesService, performanceService, messagingService }) {
   const authenticate = requireAuth({ prisma, config });
 
   const dashboard = Router();
@@ -30,6 +31,12 @@ export function dashboardRouters({ prisma, config, dashboardService, feesService
     const { alertId } = parseOrThrow(alertParams, req.params);
     const alert = await performanceService.acknowledge(req.user, alertId, req.body);
     res.json({ success: true, alert });
+  });
+
+  /** Message WhatsApp non distribué : l'école a joint le parent autrement (appel, convocation). */
+  dashboard.post('/messages/:messageId/handled', authenticate, requirePermission('VIEW_SCHOOL'), async (req, res) => {
+    const { messageId } = parseOrThrow(messageParams, req.params);
+    res.json({ success: true, ...(await messagingService.markHandled(req.user, messageId)) });
   });
 
   const fees = Router();

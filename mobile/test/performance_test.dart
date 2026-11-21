@@ -164,7 +164,7 @@ void main() {
     expect(find.byKey(ValueKey('result-${studentIds[1]}')), findsOneWidget);
     expect(find.byKey(ValueKey('result-${studentIds[0]}')), findsNothing, reason: 'filtre « En difficulté » par défaut');
     expect(find.text('Deux échecs de suite'), findsOneWidget);
-    expect(find.text('✉ Tuteur prévenu par SMS'), findsOneWidget);
+    expect(find.text('✉ Tuteur prévenu'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('ack-al1')));
     await settle(tester);

@@ -74,13 +74,19 @@ export function createFeesService({ prisma, sms, config }) {
           message,
           type: 'FEE_REMINDER',
           recipientLabel: `Tuteur de ${studentFullName(fee.student)}`,
+          template: {
+            name: 'schoolap_relance',
+            params: [formatMoney(remaining, fee.currency), studentFullName(fee.student), fee.label, formatDateFr(fromDbDate(fee.dueDate))],
+          },
         });
+        // Rappel non distribué : le délai de 24 h est libéré pour pouvoir relancer à nouveau.
+        if (result.status === 'failed') await prisma.schoolFee.update({ where: { id: fee.id }, data: { lastReminderAt: fee.lastReminderAt } });
         return {
           feeId: fee.id,
           remaining: Number(remaining.toFixed(2)),
           currency: fee.currency,
-          remindedAt: now.toISOString(),
-          sms: { status: 'sent', providerId: result.providerId, message: result.message },
+          remindedAt: result.status === 'failed' ? null : now.toISOString(),
+          sms: { status: result.status, channel: result.channel, providerId: result.providerId, message: result.message, error: result.error ?? null },
         };
       } catch (err) {
         await prisma.schoolFee.update({ where: { id: fee.id }, data: { lastReminderAt: fee.lastReminderAt } });

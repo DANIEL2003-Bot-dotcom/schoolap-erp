@@ -119,6 +119,13 @@ export function methodDetails(t) {
 }
 
 /** Libellé court pour le SMS au tuteur (alphabet GSM : pas d'apostrophe typographique). */
+/** Mode de paiement dans le message WhatsApp (accents autorisés, contrairement au SMS). */
+function methodForWhatsapp(t) {
+  if (t.method === 'CASH') return 'en espèces';
+  if (t.method === 'BANK') return `par dépôt bancaire (${t.bankName}, bordereau ${t.externalRef})`;
+  return `via ${OPERATOR_NAMES[t.operator] ?? 'Mobile Money'} (réf. ${t.externalRef ?? t.reference})`;
+}
+
 function methodForSms(t) {
   if (t.method === 'CASH') return 'en especes';
   if (t.method === 'BANK') return `par depot bancaire (${t.bankName}, bordereau ${t.externalRef})`;
@@ -238,7 +245,7 @@ export function createFinanceService({ prisma, sms, config }) {
     });
   }
 
-  async function notifyGuardian(student, message) {
+  async function notifyGuardian(student, message, template) {
     try {
       const res = await sms.send({
         studentId: student.id,
@@ -246,8 +253,9 @@ export function createFinanceService({ prisma, sms, config }) {
         type: 'PAYMENT_RECEIPT',
         recipientLabel: `Tuteur de ${studentFullName(student)}`,
         message,
+        template,
       });
-      return { status: 'sent', message: res.message };
+      return { status: res.status, channel: res.channel, message: res.message, error: res.error ?? null };
     } catch (err) {
       // Le paiement est déjà enregistré : un SMS en échec ne doit jamais l'annuler.
       logger.error('SMS de reçu non envoyé', { studentId: student.id, err: err.message });
@@ -367,6 +375,17 @@ export function createFinanceService({ prisma, sms, config }) {
         fee.student,
         `Recu Ecole n. ${created.receiptNumber} : ${formatMoney(created.amount, created.currency)} recu ${methodForSms(created)} pour ${studentFullName(fee.student)} (${fee.label}). ` +
           (balance > 0 ? `Reste a payer : ${formatMoney(balance, created.currency)}.` : 'Frais solde. Merci.'),
+        {
+          name: 'schoolap_recu',
+          params: [
+            created.receiptNumber,
+            formatMoney(created.amount, created.currency),
+            methodForWhatsapp(created),
+            studentFullName(fee.student),
+            fee.label,
+            balance > 0 ? `Reste à payer : ${formatMoney(balance, created.currency)}` : 'Frais soldé',
+          ],
+        },
       );
       logger.info('Encaissement enregistré', { receiptNumber: created.receiptNumber, method: created.method, amount: Number(created.amount), by: user.id });
       return { receipt: receiptOut(created), replayed: false, sms: smsResult };
@@ -415,6 +434,7 @@ export function createFinanceService({ prisma, sms, config }) {
         t.student,
         `Ecole : le recu n. ${withNumber.receiptNumber} (${formatMoney(t.amount, t.currency)}, ${t.schoolFee.label}) pour ${studentFullName(t.student)} a ete annule. ` +
           'Si vous avez bien paye, presentez-vous a la comptabilite avec votre recu.',
+        { name: 'schoolap_recu_annule', params: [withNumber.receiptNumber, formatMoney(t.amount, t.currency), t.schoolFee.label, studentFullName(t.student)] },
       );
       logger.warn('Reçu annulé', { receiptNumber: withNumber.receiptNumber, by: user.id, reason });
       return { receipt: receiptOut(withNumber), sms: smsResult };

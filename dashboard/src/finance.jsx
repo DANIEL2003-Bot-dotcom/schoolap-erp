@@ -514,7 +514,7 @@ export function ReceiptModal({ api, receiptId, canCancel, onClose, onChanged, no
 
   async function cancel() {
     if (reason.trim().length < 5) return notify({ error: true, text: 'Indiquez le motif de l’annulation (5 caractères minimum).' });
-    const res = await run(() => api.cancel(receiptId, reason.trim()), { success: (r) => `Reçu n° ${r.receipt.receiptNumber} annulé. Le tuteur est prévenu par SMS.` });
+    const res = await run(() => api.cancel(receiptId, reason.trim()), { success: (r) => `Reçu n° ${r.receipt.receiptNumber} annulé. Le tuteur est prévenu sur WhatsApp.` });
     if (res) {
       setReceipt(res.receipt);
       setCancelOpen(false);
@@ -560,7 +560,7 @@ export function ReceiptModal({ api, receiptId, canCancel, onClose, onChanged, no
                   <b>Annuler le reçu n° {receipt.receiptNumber}</b>
                   <div className="hint">
                     Le montant de {formatMoney(receipt.amount, receipt.currency)} sera retiré du frais « {receipt.fee.label} ». Le reçu reste dans le journal, barré « ANNULÉ », et le
-                    tuteur est prévenu par SMS.
+                    tuteur est prévenu sur WhatsApp.
                   </div>
                   <label htmlFor="cancel-reason" className="sr-only">
                     Motif
@@ -744,7 +744,8 @@ export function CollectModal({ api, initial = null, onClose, onDone, notify, onL
         <div className="alert alert-info" role="status">
           ✓ Paiement enregistré : <b>{formatMoney(receipt.amount, receipt.currency)}</b> pour {receipt.student.fullName}. Reste à payer sur « {receipt.fee.label} » :{' '}
           <b>{formatMoney(receipt.fee.balanceAfter, receipt.currency)}</b>.
-          {smsInfo?.status === 'sent' && <> Le tuteur a reçu un SMS de confirmation.</>}
+          {smsInfo?.status === 'sent' && <> Le tuteur a reçu la confirmation {smsInfo.channel === 'SMS' ? 'par SMS' : 'sur WhatsApp'}.</>}
+          {smsInfo?.status === 'failed' && <> La confirmation n’a pas été remise au tuteur : il figure dans « Messages non remis » sur l’accueil.</>}
         </div>
         <div className="receipt-preview">
           <ReceiptCopy r={receipt} copyLabel="Aperçu" duplicate={false} />

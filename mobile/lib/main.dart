@@ -297,7 +297,7 @@ class PerformanceSignal {
   final List<String> signals;
   final String summary;
   final double? averagePct;
-  /// Alerte correspondante du serveur (SMS au tuteur, prise en charge), si déjà transmise.
+  /// Alerte correspondante du serveur (message au tuteur, prise en charge), si déjà transmise.
   final Map<String, dynamic>? alert;
 }
 
@@ -1753,7 +1753,7 @@ Future<void> showSyncSheet(BuildContext context, AppController c) {
                 _SheetRow(icon: Icons.fact_check, label: 'Présences en attente', value: '${s.pendingAttendance}'),
                 _SheetRow(icon: Icons.edit_note, label: 'Cotes en attente', value: '${s.pendingGrades}'),
                 _SheetRow(icon: Icons.schedule, label: 'Dernière synchronisation', value: s.lastSyncAt == null ? '—' : formatTime(s.lastSyncAt!)),
-                _SheetRow(icon: Icons.sms, label: 'SMS d’absence (dernier envoi)', value: '${s.lastSmsSent}'),
+                _SheetRow(icon: Icons.sms, label: 'Message d’absence (dernier envoi)', value: '${s.lastSmsSent}'),
                 if (s.lastError != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -2043,7 +2043,7 @@ class AttendanceTile extends StatelessWidget {
         TextSpan(children: [
           TextSpan(text: statusText, style: TextStyle(color: statusColor, fontWeight: FontWeight.w600)),
           TextSpan(text: ' · ${student.matricule}'),
-          if (sms) const TextSpan(text: ' · SMS envoyé', style: TextStyle(color: kPresentGreen)),
+          if (sms) const TextSpan(text: ' · tuteur prévenu', style: TextStyle(color: kPresentGreen)),
           if (entry?.syncError != null) TextSpan(text: '\n${entry!.syncError}', style: const TextStyle(color: kAbsentRed)),
         ]),
         style: const TextStyle(fontSize: 12),
@@ -2606,7 +2606,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
             else
               Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
                 if (s.alert!['smsStatus'] == 'SENT')
-                  const Text('✉ Tuteur prévenu par SMS', style: TextStyle(fontSize: 12, color: kPresentGreen, fontWeight: FontWeight.w600)),
+                  const Text('✉ Tuteur prévenu', style: TextStyle(fontSize: 12, color: kPresentGreen, fontWeight: FontWeight.w600)),
                 if (s.alert!['status'] == 'ACKNOWLEDGED')
                   Text(
                     '✓ Suivi${s.alert!['acknowledgedBy'] != null ? ' par ${s.alert!['acknowledgedBy']}' : ''}${s.alert!['note'] != null ? ' — ${s.alert!['note']}' : ''}',

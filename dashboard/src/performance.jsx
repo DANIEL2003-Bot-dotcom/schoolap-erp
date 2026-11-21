@@ -172,7 +172,7 @@ export function PerformanceCard({ data, api, notify, onLogout, onChanged, mobile
       </div>
       <div className="perf-intro">
         Alerte automatique dès la saisie des cotes : <b>moyenne sous 50 %</b>, <b>baisse d’au moins 10 points</b> ou <b>deux échecs de suite</b> dans une matière.
-        Le titulaire est prévenu dans son application et le tuteur reçoit un seul SMS par baisse.
+        Le titulaire est prévenu dans son application et le tuteur reçoit un seul message (WhatsApp) par baisse.
       </div>
       {!data ? (
         <div className="card-body">
@@ -225,11 +225,15 @@ export function PerformanceCard({ data, api, notify, onLogout, onChanged, mobile
                   <td data-label="Tuteur" className="hide-sm">
                     {a.smsStatus === 'SENT' ? (
                       <span className="badge badge-sms" title={`Envoyé le ${formatDateTime(a.smsSentAt)}`}>
-                        ✓ SMS envoyé
+                        ✓ Tuteur prévenu
                       </span>
                     ) : a.smsStatus === 'SKIPPED_RECENT' ? (
-                      <span className="badge badge-wait" title="Un SMS sur les résultats a déjà été envoyé dans les dernières 24 h">
+                      <span className="badge badge-wait" title="Un message sur les résultats a déjà été envoyé dans les dernières 24 h">
                         Déjà prévenu
+                      </span>
+                    ) : a.smsStatus === 'FAILED' ? (
+                      <span className="badge badge-wait" style={{ background: 'var(--red-50)', color: 'var(--red-600)' }} title="Message WhatsApp non remis : appelez le parent">
+                        Non remis
                       </span>
                     ) : (
                       <span className="badge badge-wait">—</span>

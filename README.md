@@ -14,7 +14,7 @@ Un ERP scolaire complet, de bout en bout, pensé pour les écoles congolaises (o
 
 ```
  ┌────────────────────┐   file d'attente HTTP (outbox sqflite)   ┌──────────────────────┐
- │ App Flutter         │ ───── POST /api/attendance/sync ───────▶ │  API Express (Render) │──▶ SMS (console + SmsLog)
+ │ App Flutter         │ ───── POST /api/attendance/sync ───────▶ │  API Express (Render) │──▶ WhatsApp (API Meta) ou SMS (SmsLog)
  │ enseignant, hors-   │ ───── POST /api/grades/sync ───────────▶ │  JWT · Zod · Helmet   │
  │ ligne d'abord       │ ◀──── GET  /api/teacher/bootstrap ────── │  rate-limit · CORS    │◀─ Webhook signé HMAC
  └────────────────────┘                                          └──────────┬───────────┘   (M-Pesa / Orange / Airtel)
@@ -129,7 +129,7 @@ Fonctionnement identique à l'application Android :
 - appel (Présent / Absent, « marquer les restants présents ») ;
 - cotes par matière, période et évaluation ;
 - **mode hors ligne** : listes et saisies stockées sur le téléphone (IndexedDB), application disponible sans réseau grâce au service worker ;
-- envoi automatique des saisies dès le retour du réseau, avec SMS d'absence aux tuteurs.
+- envoi automatique des saisies dès le retour du réseau, avec message d'absence aux tuteurs (WhatsApp).
 
 Le même lien fonctionne aussi sur Android (bouton « Installer ») et sur ordinateur.
 
@@ -197,7 +197,7 @@ Le bureau proposé suit le rôle, mais il reste modifiable dans le formulaire du
 | Inscriptions et import d'élèves | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
 | Voir les montants ($ / FC) : soldes, caisse, reçus, insolvables | ✓ | — | — | — | — | ✓ | — |
 | Frais en pourcentage : taux de recouvrement, % payé par élève et par classe, élèves « Pas en ordre » | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, relances SMS | ✓ | — | — | — | — | ✓ | — |
+| Caisse : encaisser (espèces, banque, Mobile Money), imprimer les reçus, relances WhatsApp | ✓ | — | — | — | — | ✓ | — |
 | Créer ou modifier des frais (remises, reports), annuler un reçu | ✓ | — | — | — | — | ✓ | — |
 | Fixer le seuil « en ordre avec les frais » | ✓ | — | — | — | — | — | — |
 | Statut « En ordre / Pas en ordre » à l'appel (sans montant ni pourcentage) | — | — | — | — | — | — | ses classes |
@@ -273,13 +273,18 @@ Toutes les erreurs ont la forme `{"success": false, "error": {"code", "message",
 | POST | `/api/attendance/sync` | droit « Appel » | Lot de présences (500 max) |
 | POST | `/api/grades/sync` | droit « Cotes » | Lot de cotes |
 | GET | `/api/dashboard/summary?date=AAAA-MM-JJ` | droit « Consultation » | KPI, `feeStanding` (élèves en ordre / pas en ordre, % par classe) ; caisse du jour, montants et insolvables seulement avec le droit « Montants » ; absents et résultats seulement avec le droit « Vie scolaire » |
-| POST | `/api/fees/:feeId/remind` | droit « Caisse » | Relance SMS (1 par 24 h et par frais, sinon 429) |
+| POST | `/api/fees/:feeId/remind` | droit « Caisse » | Rappel au tuteur sur WhatsApp, ou SMS si le tuteur n'a pas WhatsApp (1 par 24 h et par frais, sinon 429 ; un rappel non remis libère aussitôt le délai) |
+| POST | `/api/dashboard/messages/:messageId/handled` | droit « Consultation » | « Parent appelé » : retire un message WhatsApp non remis de la liste de l'accueil |
+| GET | `/api/admin/whatsapp` | droit « Réglages » (Administrateur) | Liaison Meta, numéro (nom affiché, qualité, limite), état des 6 modèles, tuteurs WhatsApp / SMS, statistiques sur 7 jours |
+| POST | `/api/admin/whatsapp/templates` | droit « Réglages » | Soumet à Meta les modèles manquants ou refusés (409 si WhatsApp n'est pas relié) |
+| POST | `/api/admin/whatsapp/test` | droit « Réglages » | `{phone}` : message de test WhatsApp (400 si WhatsApp n'est pas relié) |
+| GET / POST | `/api/whatsapp/webhook` | jeton de vérification / signature Meta `X-Hub-Signature-256` | Vérification du webhook, accusés envoyé → remis → lu ou échec, désinscription « STOP » |
 | POST | `/api/finance/payments` | droit « Caisse » | Encaissement manuel `{clientRequestId, schoolFeeId, amount, method: CASH\|BANK\|MOBILE_MONEY_DIRECT, bankName?, externalRef?, operator?, payerPhone?, payerName?, note?}` → 201 + reçu numéroté (rejouable sans doublon) |
 | GET | `/api/finance/payments?from=&to=&method=` | droit « Caisse » | Journal de caisse (31 jours max) : totaux par mode et par caissier |
 | GET | `/api/finance/summary?date=` | droit « Caisse » | Caisse d'une journée |
 | GET | `/api/finance/receipts/:id` | droit « Caisse » | Reçu complet (montant en lettres, reste à payer, caissier) |
 | POST | `/api/finance/receipts/:id/printed` | droit « Caisse » | Compte les impressions (DUPLICATA dès la 2e) |
-| POST | `/api/finance/payments/:id/cancel` | droit « Frais » | Annule un reçu avec motif ; le montant est retiré du solde, le tuteur est prévenu par SMS |
+| POST | `/api/finance/payments/:id/cancel` | droit « Frais » | Annule un reçu avec motif ; le montant est retiré du solde, le tuteur est prévenu (WhatsApp) |
 | POST | `/api/payments/mobile-money` | JWT + droit « Caisse » (10 / min / IP) | Lance un paiement → 202 + `transactionId` |
 | POST | `/api/payments/mobile-money/webhook` | signature HMAC | Confirmation de l'opérateur (émet aussi un reçu numéroté) |
 | GET | `/api/payments/mobile-money/:transactionId` | JWT + droit « Caisse » | Suivi du paiement |
@@ -312,7 +317,7 @@ Fonctionnement :
   1. **moyenne du trimestre sous 50 %**, avec au moins 2 cotes ;
   2. **baisse d'au moins 10 points** : la dernière cote est sous la moyenne des cotes précédentes, avec au moins 2 cotes précédentes. Pour la moyenne générale, la baisse se mesure d'un trimestre à l'autre ;
   3. **deux échecs de suite**, sous 50 %, dans la même matière.
-- **SMS au tuteur une seule fois par baisse.** L'ouverture d'une alerte déclenche un seul SMS (type `PERFORMANCE_ALERT`), qui regroupe toutes les matières concernées. Tant que l'alerte reste ouverte, les nouvelles mauvaises cotes la mettent à jour sans renvoyer de SMS. Il part au plus un SMS de résultats par élève et par 24 h.
+- **Message au tuteur une seule fois par baisse.** L'ouverture d'une alerte déclenche un seul message WhatsApp (ou SMS si le tuteur n'a pas WhatsApp) (type `PERFORMANCE_ALERT`), qui regroupe toutes les matières concernées. Tant que l'alerte reste ouverte, les nouvelles mauvaises cotes la mettent à jour sans renvoyer de SMS. Il part au plus un SMS de résultats par élève et par 24 h.
 - L'alerte **se ferme toute seule** quand les résultats remontent. Une nouvelle baisse ouvrira alors une nouvelle alerte.
 - Les applications enseignant (web et Android) font le **même calcul sur le téléphone, même hors ligne**. La concordance des deux calculs est vérifiée par les tests du backend.
 
@@ -328,8 +333,8 @@ POST /api/attendance/sync
 
 Fonctionnement :
 - Les conflits suivent la règle de la **dernière écriture gagnante**, selon `clientUpdatedAt`. Chaque résultat vaut `created`, `updated`, `unchanged` ou `stale`.
-- Les requêtes sont **idempotentes** : un lot renvoyé après une coupure réseau ne crée ni doublon ni nouveau SMS.
-- Pour chaque nouvel absent, le serveur simule l'envoi d'un SMS au tuteur. Le numéro est **toujours relu en base**, jamais pris dans la requête. Le message est affiché en détail dans la console et journalisé dans `sms_logs` :
+- Les requêtes sont **idempotentes** : un lot renvoyé après une coupure réseau ne crée ni doublon ni nouveau message.
+- Pour chaque nouvel absent, le serveur prévient le tuteur sur WhatsApp (modèle `schoolap_absence`) ; sans clés WhatsApp, il simule l'envoi d'un SMS. Le numéro est **toujours relu en base**, jamais pris dans la requête. Le message est affiché en détail dans la console et journalisé dans `sms_logs` :
 
 ```
 ╔════════════════════════════════════════════════════════════════
@@ -355,7 +360,7 @@ Fonctionnement :
    - incrémente `amount_paid` ;
    - recalcule le statut (`SOLDE`, `EN_COURS` ou `INSOLVABLE`).
 
-   Un reçu SMS est ensuite envoyé au tuteur.
+   Un reçu est ensuite envoyé au tuteur (WhatsApp).
 
 Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et faites pointer son callback vers `/api/payments/mobile-money/webhook` avec le même secret HMAC.
 
@@ -367,14 +372,43 @@ Pour brancher un vrai agrégateur, mettez `SIMULATE_OPERATOR_CALLBACK=false` et 
   - **Mobile Money reçu sur le téléphone de l'école** (M-Pesa, Orange Money, Airtel Money) : opérateur et référence de la transaction obligatoires.
 
   Le montant ne peut pas dépasser le reste à payer. Un même bordereau, ou une même référence Mobile Money, ne peut être enregistré qu'une fois. Un double clic ou une coupure réseau ne crée jamais deux paiements.
-- **Reçu** : numéroté par école et par année (`000001/2026-2027`). Il indique le montant en chiffres et en lettres, le frais concerné, le total payé, le reste à payer et le nom du caissier. Le tuteur reçoit un SMS de confirmation.
+- **Reçu** : numéroté par école et par année (`000001/2026-2027`). Il indique le montant en chiffres et en lettres, le frais concerné, le total payé, le reste à payer et le nom du caissier. Le tuteur reçoit la confirmation sur WhatsApp.
 - **Impression** au choix, au moment d'imprimer :
   - **A4** : une page coupée en deux, avec la souche pour l'école et le reçu pour le parent ;
   - **ticket thermique 80 mm**.
 
   Dès la deuxième impression, le reçu porte la mention **DUPLICATA**.
 - **Journal de caisse** : il montre les encaissements par période et par mode, le total du jour et la clôture par caissier. Il est imprimable.
-- **Annulation** (erreur de saisie) : réservée au Comptable et à l'Administrateur, avec un motif obligatoire. Le reçu reste visible, barré « Annulé ». Le montant est retiré du solde de l'élève et des totaux, et le tuteur est prévenu par SMS.
+- **Annulation** (erreur de saisie) : réservée au Comptable et à l'Administrateur, avec un motif obligatoire. Le reçu reste visible, barré « Annulé ». Le montant est retiré du solde de l'élève et des totaux, et le tuteur est prévenu sur WhatsApp.
+
+### Messages aux parents par WhatsApp (API Cloud officielle de Meta)
+
+**Qui fait quoi**
+- **Parent (tuteur)** : reçoit sur WhatsApp les absences, les alertes de résultats, les reçus (et annulations) et les rappels de paiement. Il n'a pas de compte. S'il répond « STOP » (ou « Arrêt »), il ne reçoit plus de WhatsApp : sa fiche passe en SMS.
+- **Enseignant** : fait l'appel et saisit les cotes ; les messages partent automatiquement.
+- **Comptable** : encaisse et relance ; le reçu et le rappel partent sur WhatsApp.
+- **Directeur, Préfet, D.E., D.D.** (et Comptable, Administrateur) : voient sur l'accueil **« Messages non remis — appelez le parent »**, appellent le tuteur puis cliquent **« Parent appelé »**.
+- **Administrateur** : onglet **WhatsApp** (liaison, modèles, message de test) ; coche ou décoche « WhatsApp » sur la fiche d'un élève.
+- **Élève** : pas de compte.
+
+**Règles**
+- WhatsApp est activé par défaut pour tous les tuteurs ; l'école recueille leur accord (réunion des parents, fiche d'inscription). Décocher « Le tuteur a WhatsApp » sur la fiche élève : ce tuteur reçoit des SMS.
+- **Pas de SMS de secours** : si le message WhatsApp n'est pas remis (numéro sans WhatsApp, téléphone éteint trop longtemps…), rien d'autre n'est envoyé ; l'échec s'affiche pendant 7 jours dans « Messages non remis ».
+- Dans « Absences du jour », chaque absent montre l'état du message : ✓ envoyé, ✓✓ remis, ✓✓ lu, Non remis.
+- Import CSV : colonne facultative `whatsapp` (`oui` / `non`, `oui` par défaut).
+
+**Six modèles « Utility »** (Meta exige un modèle approuvé pour écrire à un parent ; le 1er paramètre est toujours le nom de l'école) : `schoolap_absence`, `schoolap_resultats`, `schoolap_recu`, `schoolap_recu_annule`, `schoolap_relance`, `schoolap_test`. L'Administrateur les soumet en un clic depuis l'onglet WhatsApp.
+
+**Mise en service**
+1. Compte Meta Business, application Meta pour développeurs avec le produit WhatsApp, numéro de l'école ajouté (ce numéro ne doit pas être actif dans l'application WhatsApp), moyen de paiement.
+2. Utilisateur système avec les droits `whatsapp_business_messaging` et `whatsapp_business_management` : jeton permanent.
+3. Variables d'environnement Render : `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (choisi librement).
+4. Webhook Meta : URL `https://<api>/api/whatsapp/webhook`, jeton = `WHATSAPP_VERIFY_TOKEN`, champ `messages` coché.
+5. Onglet WhatsApp : « Soumettre les modèles », attendre « Approuvé », puis « Envoyer le test ».
+
+**Coût et limites** : environ 0,004 $ par message « Utility » remis en RDC (tarif Meta au 1er octobre 2026), soit environ 5 $ pour 1 150 messages par mois. Avant la vérification de l'entreprise par Meta : 250 parents différents par jour.
+
+Sans clés WhatsApp, l'application fonctionne comme avant (SMS simulés) ; `WHATSAPP_SIMULATE=true` affiche les messages WhatsApp dans les journaux sans rien envoyer.
 
 ### Gestion administrative (onglets Élèves, Classes & personnel, Frais)
 

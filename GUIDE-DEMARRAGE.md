@@ -175,7 +175,7 @@ L'adresse du serveur peut aussi être changée plus tard sur l'écran de connexi
    - Sans réseau (mode avion), un **nuage orange** apparaît : l'appel est stocké dans le téléphone.
    - Réseau revenu, une **coche verte** confirme la synchronisation.
 3. **Terminal de l'API** : les SMS simulés s'affichent, par exemple `Alerte École : Votre enfant … a été marqué ABSENT ce 24/10/2026.`
-4. **Tableau de bord** : cliquez sur « Actualiser ». Le taux de présence change et les absents portent le badge **« SMS envoyé »**.
+4. **Tableau de bord** : cliquez sur « Actualiser ». Le taux de présence change et les absents portent le badge **« ✓ SMS envoyé »** (ou l'état WhatsApp ✓ envoyé, ✓✓ remis, lu, Non remis quand WhatsApp est relié).
 5. **Comptabilité** : connectez-vous avec le compte Comptable (`+243 850 000 004`, `Comptable@2026`). Le tableau de bord n'affiche que les finances.
    - Dans « Insolvables », cliquez sur **« Encaisser »** et choisissez Espèces, Banque (banque et numéro de bordereau) ou Mobile Money reçu sur le téléphone de l'école (opérateur et référence).
    - Validez : le reçu numéroté s'affiche. Cliquez sur **« Imprimer A4 (2 exemplaires) »** ou sur **« Ticket 80 mm »**.
@@ -311,6 +311,7 @@ Envoyez-leur le lien **https://daniel2003-bot-dotcom.github.io/schoolap-erp/ense
 2. **Créer vos vrais comptes, classes et élèves** dans les onglets **Classes & personnel** et **Élèves**. L'import CSV depuis Excel se fait via « Enregistrer sous → CSV UTF-8 ».
 3. **Désactiver les comptes initiaux** dont vous n'avez pas besoin.
 4. **Créer l'équipe administrative** (Préfet, D.E., D.D., Comptable) via **+ Nouveau compte**. Chaque rôle est rattaché automatiquement à son bureau (tableau des droits : README, section 2bis).
+5. **Relier WhatsApp** (messages aux parents) : renseignez sur Render `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_APP_SECRET` et `WHATSAPP_VERIFY_TOKEN`, déclarez le webhook `https://<api>/api/whatsapp/webhook` chez Meta, puis connectez-vous comme Administrateur : onglet **WhatsApp → Soumettre les modèles**, et une fois « Approuvé », **Envoyer le test**. Détails : README, « Messages aux parents par WhatsApp ».
 
 ### B6. Mettre à jour l'application plus tard
 
@@ -365,6 +366,8 @@ Le pipeline GitHub Actions **CI** exécute les tests de l'API et le build du tab
 | Mobile : l'APK release n'arrive pas à se connecter | APK compilé avec une adresse `http://` locale | L'APK release doit pointer vers l'URL **https** Render (étape B4). |
 | Render : déploiement en échec sur `prisma migrate deploy` | Base pas encore prête au premier lancement | *schoolap-erp-api → Manual Deploy → Deploy latest commit*. |
 | Les SMS n'arrivent pas sur les téléphones | Normal : les SMS sont **simulés** | Ils s'affichent dans les logs de l'API (terminal ou *Logs* Render). Un vrai fournisseur (Africa's Talking, Twilio…) se branche dans `backend/src/services/sms.js`. |
+| Un parent n'a pas reçu le message WhatsApp | Numéro sans WhatsApp, téléphone éteint, ou parent désinscrit (« STOP ») | Il figure dans **« Messages non remis — appelez le parent »** sur l'accueil : appelez-le puis cliquez « Parent appelé ». S'il n'a pas WhatsApp, décochez « Le tuteur a WhatsApp » sur la fiche élève (il recevra des SMS). |
+| Onglet WhatsApp : modèle « Refusé » | Meta a refusé le texte | Le motif s'affiche sous le modèle ; cliquez de nouveau « Soumettre » après correction. |
 
 ---
 

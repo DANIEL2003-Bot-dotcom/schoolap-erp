@@ -269,6 +269,17 @@ export function createMobileMoneyService({ prisma, sms, config, dispatchWebhook 
           `Reçu École n. ${receiptNumber} : ${formatMoney(tx.amount, tx.currency)} reçu via ${OPERATORS[tx.operator].name} ` +
           `(réf. ${tx.reference}) pour ${studentFullName(student)}. ` +
           (remaining > 0 ? `Reste à payer : ${formatMoney(remaining, fee.currency)}.` : 'Frais soldé. Merci.'),
+        template: {
+          name: 'schoolap_recu',
+          params: [
+            receiptNumber,
+            formatMoney(tx.amount, tx.currency),
+            `via ${OPERATORS[tx.operator].name} (réf. ${tx.reference})`,
+            studentFullName(student),
+            tx.schoolFee.label,
+            remaining > 0 ? `Reste à payer : ${formatMoney(remaining, fee.currency)}` : 'Frais soldé',
+          ],
+        },
       });
 
       return {

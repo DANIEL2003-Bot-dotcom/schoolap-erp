@@ -84,14 +84,17 @@ export function createAttendanceService({ prisma, sms, config }) {
     });
     if (claimed.count === 0) return 'already_sent';
     try {
-      await sms.send({
+      const isoDate = fromDbDate(row.date);
+      const res = await sms.send({
         studentId: student.id,
         phone: student.guardianPhone,
-        message: absenceMessage(student, fromDbDate(row.date)),
+        message: absenceMessage(student, isoDate),
         type: 'ABSENCE_ALERT',
         recipientLabel: `Tuteur de ${studentFullName(student)}`,
+        template: { name: 'schoolap_absence', params: [studentFullName(student), student.class?.name ?? 'sa classe', formatDateFr(isoDate)] },
       });
-      return 'sent';
+      // WhatsApp non distribué : pas de nouvel essai automatique, l'échec est signalé à la Direction.
+      return res.status === 'failed' ? 'failed' : 'sent';
     } catch (err) {
       await prisma.attendance.update({ where: { id: row.id }, data: { smsAlertSentAt: null } });
       logger.error('Échec de l’alerte SMS', { attendanceId: row.id, err: err.message });
@@ -137,7 +140,7 @@ export function createAttendanceService({ prisma, sms, config }) {
       const allowed = await accessibleClassIds(prisma, user);
       const students = await prisma.student.findMany({
         where: { id: { in: [...new Set(candidates.map((c) => c.record.studentId))] }, schoolId: user.schoolId, isActive: true },
-        select: { id: true, classId: true, lastName: true, middleName: true, firstName: true, guardianPhone: true },
+        select: { id: true, classId: true, lastName: true, middleName: true, firstName: true, guardianPhone: true, class: { select: { name: true } } },
       });
       const byId = new Map(students.map((s) => [s.id, s]));
 

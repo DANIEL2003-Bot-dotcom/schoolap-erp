@@ -141,7 +141,7 @@ export function detectSignals(grades, subjectNames = new Map()) {
 /**
  * Situation d'une classe : moyennes de chaque élève et élèves en difficulté.
  * Les signaux calculés sur l'appareil (y compris les cotes pas encore envoyées)
- * sont complétés par l'état des alertes du serveur (SMS au tuteur, prise en charge).
+ * sont complétés par l'état des alertes du serveur (message au tuteur, prise en charge).
  */
 export function classReport(cls, grades, subjects, serverAlerts = []) {
   const subjectNames = new Map(subjects.map((s) => [s.id, s.name]));

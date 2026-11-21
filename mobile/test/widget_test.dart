@@ -58,7 +58,7 @@ void main() {
     await settle(tester, rounds: 20);
     expect(server.requests.where((r) => r.url.path == '/api/attendance/sync'), isNotEmpty);
     expect(find.byKey(const ValueKey('sync-synced')), findsNWidgets(3));
-    expect(find.textContaining('SMS envoyé', findRichText: true), findsOneWidget);
+    expect(find.textContaining('tuteur prévenu', findRichText: true), findsOneWidget);
     expect(find.text('À jour'), findsOneWidget);
 
     c.sync.dispose();

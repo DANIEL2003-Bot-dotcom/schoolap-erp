@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ADMIN_CSS, AdminView, adminTabsFor } from './admin.jsx';
 import { CollectModal, FINANCE_CSS, ReceiptModal, createFinanceApi } from './finance.jsx';
 import { FeeStandingCard, STANDING_CSS } from './standing.jsx';
+import { FailedMessagesCard, MessageBadge, WHATSAPP_CSS, messagesKpi } from './whatsapp.jsx';
 import { PERF_CSS, PerformanceCard } from './performance.jsx';
 import {
   API_URL,
@@ -30,9 +31,10 @@ import { BottomNav, InstallCard, IosInstallSheet, MOBILE_CSS, UserMenu, isIOS, i
    ERP SCOLAIRE RDC — Tableau de bord du Directeur
    - Accès verrouillé : sans jeton JWT valide (vérifié par l'API), seul l'écran de connexion s'affiche
    - Droits selon la structure EPST (Préfet, Directeur, D.E., D.D., Comptable)
-   - KPI : taux de présence du jour, absents, taux de recouvrement, SMS envoyés
-   - Tableau des absences avec badge « SMS envoyé »
-   - Tableau des insolvables : « Relancer par SMS » + encaissement (espèces, banque, Mobile Money)
+   - KPI : taux de présence du jour, absents, taux de recouvrement, messages WhatsApp (lus / remis / non remis)
+   - Tableau des absences avec l'état du message au tuteur (WhatsApp ✓ envoyé, ✓✓ remis, lu, non remis)
+   - « Messages non remis — appelez le parent » (pas de SMS de secours)
+   - Tableau des insolvables : « Relancer le tuteur » + encaissement (espèces, banque, Mobile Money)
    - Comptable : accueil 100 % finances (caisse du jour, recouvrement, insolvables),
      sans présences ni résultats scolaires
    - Montants réservés au Comptable et à l'Administrateur : la Direction voit le
@@ -331,13 +333,13 @@ function LoginScreen({ onLogin }) {
             </div>
           </div>
           <h1>Pilotez votre école en temps réel.</h1>
-          <p>Présences du jour remontées par les enseignants, alertes SMS aux parents et recouvrement des frais scolaires via Mobile Money.</p>
+          <p>Présences du jour remontées par les enseignants, alertes WhatsApp aux parents et recouvrement des frais scolaires via Mobile Money.</p>
           <ul className="hero-list">
             <li>
               <span className="hero-dot">✓</span> Taux de présence et absents du jour
             </li>
             <li>
-              <span className="hero-dot">✉</span> SMS automatiques aux tuteurs
+              <span className="hero-dot">✉</span> Messages WhatsApp automatiques aux tuteurs
             </li>
             <li>
               <span className="hero-dot">$</span> M-Pesa, Orange Money, Airtel Money
@@ -443,7 +445,7 @@ function PaymentModal({ fee, api, onClose, onDone, notify, onReceipt }) {
         if (st.status === 'SUCCESS') {
           setInfo({ ...init, ...st });
           setPhase('success');
-          notify({ text: `Paiement confirmé : ${formatMoney(st.amount, st.currency)} pour ${fee.studentName}.`, sub: `Reçu SMS envoyé au tuteur · ${init.transactionId}` });
+          notify({ text: `Paiement confirmé : ${formatMoney(st.amount, st.currency)} pour ${fee.studentName}.`, sub: `Reçu envoyé au tuteur · ${init.transactionId}` });
           onDone();
           return;
         }
@@ -720,8 +722,13 @@ function Dashboard({ session, onLogout }) {
     setReminders((r) => ({ ...r, [fee.feeId]: { state: 'sending' } }));
     try {
       const res = await api.remind(fee.feeId);
-      setReminders((r) => ({ ...r, [fee.feeId]: { state: 'sent', at: res.remindedAt } }));
-      notify({ text: `SMS de relance envoyé au tuteur de ${fee.studentName}.`, sub: res.sms.message });
+      if (res.sms?.status === 'failed') {
+        setReminders((r) => ({ ...r, [fee.feeId]: { state: 'error' } }));
+        notify({ error: true, text: `Le rappel n’a pas été remis au tuteur de ${fee.studentName} : appelez-le.`, sub: res.sms.error ?? undefined });
+      } else {
+        setReminders((r) => ({ ...r, [fee.feeId]: { state: 'sent', at: res.remindedAt } }));
+        notify({ text: `Rappel envoyé ${res.sms?.channel === 'SMS' ? 'par SMS' : 'sur WhatsApp'} au tuteur de ${fee.studentName}.`, sub: res.sms?.message ?? undefined });
+      }
       load(true);
     } catch (err) {
       if (err.status === 401) return onLogout('Votre session a expiré. Reconnectez-vous.');
@@ -898,7 +905,10 @@ function Dashboard({ session, onLogout }) {
                   }
                 />
                 {amounts || !data.feeStanding ? (
-                  <Kpi tone="grey" label="SMS envoyés" value={data.smsSentToday} foot="Absences, résultats, relances et reçus du jour" />
+                  (() => {
+                    const k = messagesKpi(data.messages, data.smsSentToday);
+                    return <Kpi tone={k.tone} label={k.label} value={k.value} foot={k.foot} />;
+                  })()
                 ) : (
                   <Kpi
                     tone={data.feeStanding.notEligibleCount > 0 ? 'red' : 'green'}
@@ -910,6 +920,18 @@ function Dashboard({ session, onLogout }) {
               </>
             )}
           </section>
+
+          {data && (
+            <FailedMessagesCard
+              messages={data.messages}
+              token={session.token}
+              notify={notify}
+              onLogout={onLogout}
+              onSlow={setSlow}
+              onHandled={() => load(true)}
+              mobile={mobile}
+            />
+          )}
 
           {academic && (
           <div className="grid-2">
@@ -966,14 +988,7 @@ function Dashboard({ session, onLogout }) {
                             {formatPhone(a.guardianPhone)}
                           </td>
                           <td data-label="Notification" className="c-end">
-                            {a.smsSent ? (
-                              <span className="badge badge-sms" title={`Envoyé le ${formatDateTime(a.smsSentAt)}`}>
-                                ✓ SMS {mobile ? '' : 'envoyé · '}
-                                {formatTime(a.smsSentAt)}
-                              </span>
-                            ) : (
-                              <span className="badge badge-wait">En attente</span>
-                            )}
+                            <MessageBadge message={a.message} fallbackAt={a.smsSent ? a.smsSentAt : null} compact={mobile} />
                           </td>
                         </tr>
                       ))}
@@ -1132,11 +1147,11 @@ function Dashboard({ session, onLogout }) {
                                 className="btn btn-sm btn-danger"
                                 onClick={() => remind(f)}
                                 disabled={r?.state === 'sending' || inCooldown}
-                                title={inCooldown ? 'Une seule relance par 24 h et par frais' : 'Envoyer un SMS de rappel au tuteur'}
+                                title={inCooldown ? 'Une seule relance par 24 h et par frais' : 'Envoyer un rappel de paiement au tuteur (WhatsApp)'}
                               >
                                 {r?.state === 'sending' ? <span className="spinner" /> : '✉'} {inCooldown ? 'Relancé' : (
                                   <>
-                                    Relancer<span className="lg-only"> par SMS</span>
+                                    Relancer<span className="lg-only"> le tuteur</span>
                                   </>
                                 )}
                               </button>
@@ -1390,7 +1405,7 @@ export default function App() {
 
   return (
     <>
-      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + FINANCE_CSS + STANDING_CSS + MOBILE_CSS}</style>
+      <style>{CSS + PASSWORD_CSS + ADMIN_CSS + PERF_CSS + FINANCE_CSS + STANDING_CSS + WHATSAPP_CSS + MOBILE_CSS}</style>
       {content}
     </>
   );
